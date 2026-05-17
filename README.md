@@ -18,12 +18,19 @@ Clippy is a native macOS menu bar app that runs classic Microsoft Agent characte
 ## Build and Run
 
 ```sh
-git clone https://github.com/Cosmo/Clippy.git
+git clone https://github.com/DishanRajapaksha/clippy-macos.git
 cd clippy-macos
-open Clippy.xcodeproj
+make build
+make run
 ```
 
-Then build and run the **Clippy macOS** scheme in Xcode.
+Useful targets:
+
+- `make help`
+- `make build`
+- `make run`
+- `make clean`
+- `make open` (opens `clippy.xcodeproj` in Xcode)
 
 ## Add Other Agents
 
@@ -42,7 +49,7 @@ brew install imagemagick ffmpeg
 ### Convert
 
 ```sh
-./agent-convert.sh PATH_TO_AGENT NEW_NAME
+make convert-agent AGENT_PATH=PATH_TO_AGENT NEW_NAME=NEW_NAME
 ```
 
 - `PATH_TO_AGENT`: path to the decompiled agent directory
@@ -51,7 +58,7 @@ brew install imagemagick ffmpeg
 Example:
 
 ```sh
-./agent-convert.sh agents/CLIPPIT clippy
+make convert-agent AGENT_PATH=agents/CLIPPIT NEW_NAME=clippy
 ```
 
 ### Install Converted Agent
