@@ -11,6 +11,15 @@ import AppKit
 class AgentViewController: NSViewController {
     var agentController: AgentController
     var agentView: AgentView
+    private var speechPopover: NSPopover?
+    private var speechDismissWorkItem: DispatchWorkItem?
+    private let quickPhrases = [
+        "Need a hand?",
+        "You're doing great.",
+        "Want to animate me?",
+        "Tip: right-click for Animate!",
+        "Let's get this done."
+    ]
     
     init() {
         agentView = AgentView()
@@ -127,6 +136,8 @@ extension AgentViewController {
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 {
             agentController.animate()
+        } else if event.clickCount == 1 {
+            speakRandomPhrase()
         }
     }
     
@@ -149,7 +160,7 @@ extension AgentViewController {
     }
     
     @objc func optionsAction(sender: AnyObject) {
-        let viewController = BalloonViewController(nibName: nil, bundle: nil)
+        let viewController = BalloonViewController(text: "Options are currently minimal.")
         print(viewController)
         let popOver = NSPopover()
         popOver.behavior = .semitransient
@@ -158,5 +169,30 @@ extension AgentViewController {
         popOver.contentViewController = viewController
         let rect = self.view.frame
         popOver.show(relativeTo: rect, of: view, preferredEdge: NSRectEdge.maxY)
+    }
+
+    private func speakRandomPhrase() {
+        guard let phrase = quickPhrases.randomElement() else { return }
+        speak(text: phrase)
+    }
+
+    private func speak(text: String) {
+        speechDismissWorkItem?.cancel()
+        speechPopover?.close()
+
+        let bubbleVC = BalloonViewController(text: text)
+        let popover = NSPopover()
+        popover.behavior = .semitransient
+        popover.contentSize = CGSize(width: 260, height: 80)
+        popover.animates = true
+        popover.contentViewController = bubbleVC
+        popover.show(relativeTo: agentView.bounds, of: agentView, preferredEdge: .maxY)
+        speechPopover = popover
+
+        let work = DispatchWorkItem { [weak self] in
+            self?.speechPopover?.close()
+        }
+        speechDismissWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: work)
     }
 }
