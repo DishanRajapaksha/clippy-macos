@@ -293,6 +293,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                   action: #selector(selectAgent(sender:)),
                                   keyEquivalent: "")
             item.target = self
+            item.representedObject = agentName
             if lastUsedAgent == agentName {
                 item.state = .on
             }
@@ -489,7 +490,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = [.zip, UTType(filenameExtension: "agent")].compactMap { $0 }
+        panel.allowedContentTypes = [.zip, UTType(filenameExtension: "agent"), UTType(filenameExtension: "acs")].compactMap { $0 }
         panel.prompt = "Import"
 
         guard panel.runModal() == .OK else { return }
@@ -637,7 +638,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         try? fm.removeItem(at: destination)
         try fm.copyItem(at: url, to: destination)
 
-        if url.pathExtension == "zip" {
+        let pathExtension = url.pathExtension.lowercased()
+        if pathExtension == "zip" {
             let process = try Process.run(URL(fileURLWithPath: "/usr/bin/unzip"),
                                           arguments: ["-o", destination.path, "-d", agentsURL.path])
             process.waitUntilExit()
@@ -646,7 +648,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     NSLocalizedDescriptionKey: "unzip failed with status \(process.terminationStatus)"
                 ])
             }
-        } else if !(url.pathExtension == "agent" || url.hasDirectoryPath) {
+        } else if !(pathExtension == "agent" || pathExtension == "acs" || url.hasDirectoryPath) {
             throw NSError(domain: "ClippyImport", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "unsupported file type"
             ])
@@ -714,7 +716,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc func selectAgent(sender: AnyObject) {
         guard let menuItem = sender as? NSMenuItem else { return }
-        let name = menuItem.title.lowercased()
+        let name = (menuItem.representedObject as? String) ?? menuItem.title.lowercased()
         
         if let isVisible = window?.isVisible, isVisible == true {
             try? AppDelegate.agentController?.load(name: name)

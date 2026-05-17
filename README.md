@@ -34,11 +34,14 @@ Useful targets:
 
 ## Add Other Agents
 
-This project uses extracted agent resources (it does not load `*.acs` directly).
+The app can import Microsoft Agent `*.acs` files directly.
 
-1. Decompile an `*.acs` file using [MSAgent Decompiler](http://www.lebeausoftware.org/software/decompile.aspx).
-2. Convert the extracted resources with this project’s script.
-3. Move the generated `.agent` folder into the app’s Agents directory.
+1. Click `📎` in the menu bar.
+2. Choose `Import Agent…`.
+3. Select one or more `*.acs`, `*.agent`, or `*.agent.zip` files.
+4. Select the imported character under `📎` → `Agents`.
+
+The older extracted-resource flow is still available if you already have a decompiled agent directory.
 
 ### Requirements
 

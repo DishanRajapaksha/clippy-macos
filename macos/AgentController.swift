@@ -48,7 +48,7 @@ class AgentController {
     
     func audioActionForFrame(frame: AgentFrame) -> SKAction? {
         guard let agent = agent, let soundIndex = frame.soundIndex else { return nil }
-        let soundURL = agent.soundURL(forIndex: soundIndex)
+        guard let soundURL = agent.soundURL(forIndex: soundIndex) else { return nil }
         let action = SKAction.run {
             let playerItem = AVPlayerItem(url: soundURL)
             self.player.replaceCurrentItem(with: playerItem)

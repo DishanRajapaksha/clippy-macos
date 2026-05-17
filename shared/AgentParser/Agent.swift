@@ -25,11 +25,26 @@ struct Agent {
     var resourceNameWithSuffix: String
     var spriteMap: CGImage
     let soundsURL: URL
+    var soundURLsByIndex: [Int: URL] = [:]
     
     init?(agentURL: URL) {
         self.agentURL = agentURL
         self.resourceNameWithSuffix = agentURL.lastPathComponent
-        self.resourceName = resourceNameWithSuffix.replacingOccurrences(of: ".agent", with: "")
+        self.resourceName = agentURL.deletingPathExtension().lastPathComponent
+
+        if agentURL.pathExtension.lowercased() == "acs" {
+            guard let parsedAgent = try? ACSAgentParser.parse(url: agentURL, resourceName: resourceName) else {
+                return nil
+            }
+            self.soundsURL = parsedAgent.soundsURL
+            self.soundURLsByIndex = parsedAgent.soundURLsByIndex
+            self.character = parsedAgent.character
+            self.balloon = parsedAgent.balloon
+            self.animations = parsedAgent.animations
+            self.states = parsedAgent.states
+            self.spriteMap = parsedAgent.spriteMap
+            return
+        }
 
         // Support both layouts:
         // 1) <name>.agent/<name>.acd
@@ -79,13 +94,29 @@ struct Agent {
     }
     
     init?(resourceName: String) {
-        let directoryName = "\(resourceName).agent"
-        self.init(agentURL: Agent.agentsURL().appendingPathComponent(directoryName))
+        guard let agentURL = Agent.agentURL(forResourceName: resourceName) else {
+            return nil
+        }
+        self.init(agentURL: agentURL)
     }
     
-    func soundURL(forIndex index: Int) -> URL {
+    func soundURL(forIndex index: Int) -> URL? {
+        if let soundURL = soundURLsByIndex[index] {
+            return soundURL
+        }
+
         let fileName = "\(resourceName)_\(index).mp3"
-        return soundsURL.appendingPathComponent(fileName)
+        let mp3URL = soundsURL.appendingPathComponent(fileName)
+        if FileManager.default.fileExists(atPath: mp3URL.path) {
+            return mp3URL
+        }
+
+        let wavURL = soundsURL.appendingPathComponent("\(resourceName)_\(index).wav")
+        if FileManager.default.fileExists(atPath: wavURL.path) {
+            return wavURL
+        }
+
+        return nil
     }
     
     func findAnimation(_ name: String) -> AgentAnimation? {
@@ -143,6 +174,22 @@ extension Agent {
         
         return agentsURL
     }
+
+    static func acsAudioCacheURL() -> URL {
+        let fileManager = FileManager.default
+
+        guard let applicationSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            fatalError("Cant create ACS audio cache directory")
+        }
+
+        let cacheURL = applicationSupportURL.appendingPathComponent("Clippy/ACSAudioCache", isDirectory: true)
+        if !fileManager.fileExists(atPath: cacheURL.path) {
+            try? fileManager.createDirectory(at: cacheURL,
+                                             withIntermediateDirectories: true,
+                                             attributes: nil)
+        }
+        return cacheURL
+    }
     
     static func createAgentsDirectoriesIfNeeded(url: URL) {
         let fileManager = FileManager.default
@@ -159,18 +206,52 @@ extension Agent {
         }
     }
     
+    static func agentURL(forResourceName resourceName: String) -> URL? {
+        let fileManager = FileManager.default
+        let strippedName = resourceName
+            .replacingOccurrences(of: ".agent", with: "")
+            .replacingOccurrences(of: ".acs", with: "")
+        let agentsURL = Agent.agentsURL()
+        let exactAgentURL = agentsURL.appendingPathComponent("\(strippedName).agent", isDirectory: true)
+        if fileManager.fileExists(atPath: exactAgentURL.path) {
+            return exactAgentURL
+        }
+
+        let exactACSURL = agentsURL.appendingPathComponent("\(strippedName).acs")
+        if fileManager.fileExists(atPath: exactACSURL.path), isSupportedACSFile(exactACSURL) {
+            return exactACSURL
+        }
+
+        guard let items = try? fileManager.contentsOfDirectory(at: agentsURL,
+                                                               includingPropertiesForKeys: [.isDirectoryKey],
+                                                               options: []) else {
+            return nil
+        }
+
+        let lowercasedName = strippedName.lowercased()
+        return items.first { item in
+            let itemName = item.deletingPathExtension().lastPathComponent.lowercased()
+            if item.hasDirectoryPath {
+                return item.pathExtension.lowercased() == "agent" && itemName == lowercasedName
+            }
+            return item.pathExtension.lowercased() == "acs" && itemName == lowercasedName && isSupportedACSFile(item)
+        }
+    }
+
     static func agentNames() -> [String] {
-        var agentNames: [String] = []
+        var agentNames = Set<String>()
         let fileManager = FileManager.default
         guard let items = try? fileManager.contentsOfDirectory(at: agentsURL(),
-                                                               includingPropertiesForKeys: nil,
+                                                               includingPropertiesForKeys: [.isDirectoryKey],
                                                                options: []) else {
             return []
         }
-        
+
         for item in items {
             if item.hasDirectoryPath && item.lastPathComponent.hasSuffix(".agent") {
-                agentNames.append(item.lastPathComponent.replacingOccurrences(of: ".agent", with: ""))
+                agentNames.insert(item.deletingPathExtension().lastPathComponent)
+            } else if !item.hasDirectoryPath && item.pathExtension.lowercased() == "acs" && isSupportedACSFile(item) {
+                agentNames.insert(item.deletingPathExtension().lastPathComponent)
             }
         }
         return agentNames.sorted()
@@ -178,5 +259,18 @@ extension Agent {
     
     static func randomAgentName() -> String? {
         agentNames().randomElement()
+    }
+
+    private static func isSupportedACSFile(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer {
+            try? handle.close()
+        }
+        let signature = handle.readData(ofLength: 4)
+        guard signature.count == 4 else { return false }
+        return signature[0] == 0xC3 &&
+            signature[1] == 0xAB &&
+            signature[2] == 0xCD &&
+            signature[3] == 0xAB
     }
 }
