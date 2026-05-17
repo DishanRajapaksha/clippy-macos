@@ -94,10 +94,15 @@ extension AgentViewController {
     @objc func animateAction() {
         agentController.animate()
     }
+
+    @objc func idleAnimationAction() {
+        agentController.animateIdle()
+    }
     
     @objc func chooseAssistantAction() {
         guard let name = Agent.randomAgentName() else { return }
         try? agentController.load(name: name)
+        agentController.show()
     }
     
     override var acceptsFirstResponder: Bool {
@@ -177,19 +182,31 @@ extension AgentViewController {
         }
         applyEdgeSnap()
         applyThrowInertiaIfNeeded()
+        saveCurrentWindowFrame()
     }
     
     override func rightMouseDown(with event: NSEvent) {
-        guard let _ = agentController.agent else { return }
+        guard let agent = agentController.agent else { return }
         
         let menu = NSMenu(title: "Agent")
-        let menuItems = [NSMenuItem(title: "Animate!",
-                                    action: #selector(animateAction),
-                                    keyEquivalent: "")]
-        
-        for (index, menuItem) in menuItems.enumerated() {
-            menu.insertItem(menuItem, at: index)
+        menu.addItem(withTitle: "Animate!", action: #selector(animateAction), keyEquivalent: "")
+        menu.addItem(withTitle: "Idle Animation", action: #selector(idleAnimationAction), keyEquivalent: "")
+        menu.addItem(withTitle: "Say Something", action: #selector(saySomethingAction), keyEquivalent: "")
+        menu.addItem(NSMenuItem.separator())
+
+        let animationMenu = NSMenu(title: "Animations")
+        for animation in commonAnimations(from: agent) {
+            let item = NSMenuItem(title: animation.name, action: #selector(playAnimationMenuAction(sender:)), keyEquivalent: "")
+            item.representedObject = animation.name
+            animationMenu.addItem(item)
         }
+        let animationsItem = NSMenuItem(title: "Animations", action: nil, keyEquivalent: "")
+        animationsItem.submenu = animationMenu
+        animationsItem.isEnabled = !animationMenu.items.isEmpty
+        menu.addItem(animationsItem)
+
+        menu.addItem(withTitle: "Change Agent", action: #selector(chooseAssistantAction), keyEquivalent: "")
+        menu.addItem(withTitle: "Hide", action: #selector(hideAction(sender:)), keyEquivalent: "")
         NSMenu.popUpContextMenu(menu, with: event, for: agentView)
     }
     
@@ -207,6 +224,29 @@ extension AgentViewController {
         popOver.contentViewController = viewController
         let rect = self.view.frame
         popOver.show(relativeTo: rect, of: view, preferredEdge: NSRectEdge.maxY)
+    }
+
+    @objc private func saySomethingAction() {
+        speakRandomPhrase()
+    }
+
+    @objc private func playAnimationMenuAction(sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String,
+              let animation = agentController.agent?.findAnimation(name) else { return }
+        agentController.play(animation: animation)
+    }
+
+    private func commonAnimations(from agent: Agent) -> [AgentAnimation] {
+        let preferredNames = [
+            "Greeting", "Wave", "GetAttention", "Alert", "Thinking", "Processing",
+            "Explain", "GestureLeft", "GestureRight", "GestureUp", "GestureDown"
+        ]
+        var animations = preferredNames.compactMap { agent.findAnimation($0) }
+        let existingNames = Set(animations.map { $0.name })
+        animations.append(contentsOf: agent.animations
+            .filter { !existingNames.contains($0.name) && !$0.name.localizedCaseInsensitiveContains("idle") }
+            .prefix(max(0, 12 - animations.count)))
+        return animations
     }
 
     private func speakRandomPhrase() {
@@ -235,6 +275,7 @@ extension AgentViewController {
     }
 
     private func applyThrowInertiaIfNeeded() {
+        guard (NSApplication.shared.delegate as? AppDelegate)?.isThrowInertiaEnabled() ?? true else { return }
         guard let window = view.window else { return }
         let speed = hypot(dragVelocity.x, dragVelocity.y)
         guard speed > 250 else { return }
@@ -259,6 +300,7 @@ extension AgentViewController {
             frame.origin.y += self.dragVelocity.y / 60.0
             frame = self.clampedFrame(frame, in: window)
             window.setFrame(frame, display: true)
+            self.saveCurrentWindowFrame()
         }
     }
 
@@ -268,6 +310,7 @@ extension AgentViewController {
     }
 
     private func applyEdgeSnap() {
+        guard (NSApplication.shared.delegate as? AppDelegate)?.isEdgeSnapEnabled() ?? true else { return }
         guard let window = view.window else { return }
         let snapDistance: CGFloat = 18
         guard let screen = NSScreen.main ?? window.screen else { return }
@@ -293,6 +336,7 @@ extension AgentViewController {
         }
 
         window.setFrame(frame, display: true, animate: true)
+        saveCurrentWindowFrame()
     }
 
     private func clampedFrame(_ frame: CGRect, in window: NSWindow) -> CGRect {
@@ -303,5 +347,10 @@ extension AgentViewController {
         clamped.origin.x = max(visible.minX, min(clamped.origin.x, visible.maxX - clamped.width))
         clamped.origin.y = max(visible.minY, min(clamped.origin.y, visible.maxY - clamped.height))
         return clamped
+    }
+
+    private func saveCurrentWindowFrame() {
+        guard let frame = view.window?.frame else { return }
+        (NSApplication.shared.delegate as? AppDelegate)?.saveWindowFrame(frame)
     }
 }

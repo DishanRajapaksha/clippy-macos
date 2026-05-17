@@ -7,6 +7,7 @@
 //
 
 import Cocoa
+import ServiceManagement
 
 class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
     struct PreviewRow {
@@ -83,10 +84,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let applicationName = "Clippy"
     static let lastUsedAgentDefaultsKey = "LastUsedAgent"
     static let speechBubblesEnabledDefaultsKey = "SpeechBubblesEnabled"
+    static let alwaysOnTopDefaultsKey = "AlwaysOnTop"
+    static let joinAllSpacesDefaultsKey = "JoinAllSpaces"
+    static let throwInertiaEnabledDefaultsKey = "ThrowInertiaEnabled"
+    static let edgeSnapEnabledDefaultsKey = "EdgeSnapEnabled"
+    static let lastWindowFrameDefaultsKey = "LastWindowFrame"
     var window: NSWindow?
     var statusItem: NSStatusItem?
     var agentsMenuItem: NSMenuItem?
     var autoAnimateMenuItem: NSMenuItem?
+    var behaviorMenuItem: NSMenuItem?
     var muteMenuItem: NSMenuItem?
     var speechBubblesMenuItem: NSMenuItem?
     var previewWindowController: NSWindowController?
@@ -103,14 +110,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         UserDefaults.standard.register(defaults: [
             AgentController.autoAnimateIntervalDefaultsKey: AgentController.defaultAutoAnimateInterval,
-            AgentController.idleCursorProximityDefaultsKey: AgentController.defaultIdleCursorProximity,
             AgentController.muteDefaultsKey: false,
-            Self.speechBubblesEnabledDefaultsKey: true
+            Self.speechBubblesEnabledDefaultsKey: true,
+            Self.alwaysOnTopDefaultsKey: true,
+            Self.joinAllSpacesDefaultsKey: true,
+            Self.throwInertiaEnabledDefaultsKey: true,
+            Self.edgeSnapEnabledDefaultsKey: true
         ])
         
         window = AgentWindow(contentRect: CGRect.zero, styleMask: [], backing: .buffered, defer: true)
         window?.title = applicationName
         window?.contentViewController = AgentViewController()
+        applyWindowBehavior()
         if !Agent.agentNames().isEmpty {
             window?.makeKeyAndOrderFront(self)
         }
@@ -167,6 +178,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let statusBarMenu = NSMenu(title: "Clippy")
         agentsMenuItem = NSMenuItem(title: "Agents", action: nil, keyEquivalent: "")
         autoAnimateMenuItem = NSMenuItem(title: "Auto Animate", action: nil, keyEquivalent: "")
+        behaviorMenuItem = NSMenuItem(title: "Behavior", action: nil, keyEquivalent: "")
         muteMenuItem = NSMenuItem(title: "Mute", action: #selector(toggleMuteAction(sender:)), keyEquivalent: "")
         speechBubblesMenuItem = NSMenuItem(title: "Speech Bubbles", action: #selector(toggleSpeechBubblesAction(sender:)), keyEquivalent: "")
         
@@ -183,6 +195,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let autoAnimateItem = autoAnimateMenuItem {
             statusBarMenu.addItem(autoAnimateItem)
             statusBarMenu.setSubmenu(createAutoAnimateMenu(), for: autoAnimateItem)
+        }
+        if let behaviorItem = behaviorMenuItem {
+            statusBarMenu.addItem(behaviorItem)
+            statusBarMenu.setSubmenu(createBehaviorMenu(), for: behaviorItem)
         }
         statusBarMenu.addItem(NSMenuItem.separator())
         guard let menuItem = agentsMenuItem else  { return }
@@ -228,6 +244,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(disableItem)
         return menu
     }
+
+    func createBehaviorMenu() -> NSMenu {
+        let menu = NSMenu(title: "Behavior")
+        let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLoginAction(sender:)), keyEquivalent: "")
+        launchItem.state = isLaunchAtLoginEnabled() ? .on : .off
+        menu.addItem(launchItem)
+
+        let alwaysOnTopItem = NSMenuItem(title: "Always on Top", action: #selector(toggleAlwaysOnTopAction(sender:)), keyEquivalent: "")
+        alwaysOnTopItem.state = isAlwaysOnTopEnabled() ? .on : .off
+        menu.addItem(alwaysOnTopItem)
+
+        let allSpacesItem = NSMenuItem(title: "Join All Spaces", action: #selector(toggleJoinAllSpacesAction(sender:)), keyEquivalent: "")
+        allSpacesItem.state = isJoinAllSpacesEnabled() ? .on : .off
+        menu.addItem(allSpacesItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let inertiaItem = NSMenuItem(title: "Throw Inertia", action: #selector(toggleThrowInertiaAction(sender:)), keyEquivalent: "")
+        inertiaItem.state = isThrowInertiaEnabled() ? .on : .off
+        menu.addItem(inertiaItem)
+
+        let snapItem = NSMenuItem(title: "Edge Snap", action: #selector(toggleEdgeSnapAction(sender:)), keyEquivalent: "")
+        snapItem.state = isEdgeSnapEnabled() ? .on : .off
+        menu.addItem(snapItem)
+        return menu
+    }
     
     @objc func quitAction(sender: AnyObject) {
         NSApplication.shared.terminate(self)
@@ -236,6 +278,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func reloadAction(sender: AnyObject) {
         agentsMenuItem?.submenu = createAgentsMenu()
         autoAnimateMenuItem?.submenu = createAutoAnimateMenu()
+        behaviorMenuItem?.submenu = createBehaviorMenu()
     }
 
     @objc func selectAutoAnimateInterval(sender: AnyObject) {
@@ -317,6 +360,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setSpeechBubblesEnabled(!isSpeechBubblesEnabled())
     }
 
+    @objc func toggleLaunchAtLoginAction(sender: AnyObject) {
+        setLaunchAtLoginEnabled(!isLaunchAtLoginEnabled())
+        behaviorMenuItem?.submenu = createBehaviorMenu()
+    }
+
+    @objc func toggleAlwaysOnTopAction(sender: AnyObject) {
+        UserDefaults.standard.set(!isAlwaysOnTopEnabled(), forKey: Self.alwaysOnTopDefaultsKey)
+        applyWindowBehavior()
+        behaviorMenuItem?.submenu = createBehaviorMenu()
+    }
+
+    @objc func toggleJoinAllSpacesAction(sender: AnyObject) {
+        UserDefaults.standard.set(!isJoinAllSpacesEnabled(), forKey: Self.joinAllSpacesDefaultsKey)
+        applyWindowBehavior()
+        behaviorMenuItem?.submenu = createBehaviorMenu()
+    }
+
+    @objc func toggleThrowInertiaAction(sender: AnyObject) {
+        UserDefaults.standard.set(!isThrowInertiaEnabled(), forKey: Self.throwInertiaEnabledDefaultsKey)
+        behaviorMenuItem?.submenu = createBehaviorMenu()
+    }
+
+    @objc func toggleEdgeSnapAction(sender: AnyObject) {
+        UserDefaults.standard.set(!isEdgeSnapEnabled(), forKey: Self.edgeSnapEnabledDefaultsKey)
+        behaviorMenuItem?.submenu = createBehaviorMenu()
+    }
+
     func isMuted() -> Bool {
         return UserDefaults.standard.bool(forKey: AgentController.muteDefaultsKey)
     }
@@ -334,6 +404,70 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func setSpeechBubblesEnabled(_ value: Bool) {
         UserDefaults.standard.set(value, forKey: Self.speechBubblesEnabledDefaultsKey)
         speechBubblesMenuItem?.state = value ? .on : .off
+    }
+
+    func isAlwaysOnTopEnabled() -> Bool {
+        UserDefaults.standard.bool(forKey: Self.alwaysOnTopDefaultsKey)
+    }
+
+    func isJoinAllSpacesEnabled() -> Bool {
+        UserDefaults.standard.bool(forKey: Self.joinAllSpacesDefaultsKey)
+    }
+
+    func isThrowInertiaEnabled() -> Bool {
+        UserDefaults.standard.bool(forKey: Self.throwInertiaEnabledDefaultsKey)
+    }
+
+    func isEdgeSnapEnabled() -> Bool {
+        UserDefaults.standard.bool(forKey: Self.edgeSnapEnabledDefaultsKey)
+    }
+
+    func applyWindowBehavior() {
+        window?.level = isAlwaysOnTopEnabled() ? .floating : .normal
+        window?.collectionBehavior = isJoinAllSpacesEnabled()
+            ? [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+            : [.fullScreenAuxiliary, .stationary]
+    }
+
+    func saveWindowFrame(_ frame: CGRect) {
+        UserDefaults.standard.set(NSStringFromRect(frame), forKey: Self.lastWindowFrameDefaultsKey)
+    }
+
+    func savedWindowFrame() -> CGRect? {
+        guard let value = UserDefaults.standard.string(forKey: Self.lastWindowFrameDefaultsKey) else { return nil }
+        let frame = NSRectFromString(value)
+        guard frame.width > 0, frame.height > 0 else { return nil }
+        return frame
+    }
+
+    func isLaunchAtLoginEnabled() -> Bool {
+        if #available(macOS 13.0, *) {
+            return SMAppService.mainApp.status == .enabled
+        }
+        return false
+    }
+
+    func setLaunchAtLoginEnabled(_ enabled: Bool) {
+        guard #available(macOS 13.0, *) else { return }
+        do {
+            if enabled {
+                if SMAppService.mainApp.status != .enabled {
+                    try SMAppService.mainApp.register()
+                }
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            presentAlert(title: "Launch at Login", message: error.localizedDescription)
+        }
+    }
+
+    func presentAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .informational
+        alert.runModal()
     }
     
     @objc func selectAgent(sender: AnyObject) {

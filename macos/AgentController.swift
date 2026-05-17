@@ -13,12 +13,12 @@ import SpriteKit
 class AgentController {
     static let autoAnimateIntervalDefaultsKey = "AutoAnimateIntervalSeconds"
     static let defaultAutoAnimateInterval: TimeInterval = 12.0
-    static let idleCursorProximityDefaultsKey = "IdleCursorProximityPoints"
-    static let defaultIdleCursorProximity: CGFloat = 180.0
     static let muteDefaultsKey = "IsMuted"
 
     var isMuted = false
     var autoAnimateTimer: Timer?
+    private var isAnimating = false
+    private var playbackID = UUID()
     var player: AVPlayer = {
         return AVPlayer()
     }()
@@ -38,7 +38,6 @@ class AgentController {
     }
     
     func load(name: String) throws {
-        print(name)
         guard let agent = Agent(resourceName: name) else { return }
         delegate?.willLoadAgent(agent: agent)
         self.agent = agent
@@ -64,9 +63,14 @@ class AgentController {
         self.agentView?.agentSprite.texture = SKTexture(cgImage: try! agent.textureAtIndex(index: 0))
     }
     
-    func play(animation: AgentAnimation, withSoundEnabled soundEnabled: Bool = true, completion: (() -> Void)? = nil) {
+    func play(animation: AgentAnimation, withSoundEnabled soundEnabled: Bool = true, interruptCurrent: Bool = true, completion: (() -> Void)? = nil) {
         guard let agent = agent else { return }
-        print(animation.name)
+        if isAnimating && !interruptCurrent {
+            return
+        }
+        let currentPlaybackID = UUID()
+        playbackID = currentPlaybackID
+        isAnimating = true
         
         DispatchQueue.global(qos: .background).async {
             var actions: [SKAction] = []
@@ -94,8 +98,11 @@ class AgentController {
             }
             
             DispatchQueue.main.asyncAfter(deadline: .now(), execute: {
+                guard self.playbackID == currentPlaybackID else { return }
                 self.agentView?.agentSprite.removeAllActions()
                 self.agentView?.agentSprite.run(SKAction.sequence(actions), completion: {
+                    guard self.playbackID == currentPlaybackID else { return }
+                    self.isAnimating = false
                     completion?()
                 })
             })
@@ -142,6 +149,26 @@ class AgentController {
         let animation = agent.animations.randomElement()!
         play(animation: animation)
     }
+
+    func animateIdle() {
+        guard !isHidden, let animation = idleAnimations().randomElement() else { return }
+        play(animation: animation, interruptCurrent: false)
+    }
+
+    private func idleAnimations() -> [AgentAnimation] {
+        guard let agent = agent else { return [] }
+        let idleAnimationNames = Set(
+            agent.states
+                .filter { $0.name.hasPrefix("Idling") }
+                .flatMap { $0.animationNames }
+        )
+        let stateAnimations = agent.animations.filter { idleAnimationNames.contains($0.name) }
+        if !stateAnimations.isEmpty {
+            return stateAnimations
+        }
+
+        return agent.animations.filter { $0.name.localizedCaseInsensitiveContains("idle") }
+    }
     
     func hide() {
         delegate?.handleHide()
@@ -158,35 +185,21 @@ class AgentController {
 
     func restartAutoAnimateTimer() {
         autoAnimateTimer?.invalidate()
+        let configured = UserDefaults.standard.double(forKey: Self.autoAnimateIntervalDefaultsKey)
+        guard configured > 0 else {
+            autoAnimateTimer = nil
+            return
+        }
+        autoAnimateTimer = Timer.scheduledTimer(withTimeInterval: nextAutoAnimateInterval(), repeats: false) { [weak self] _ in
+            self?.animateIdle()
+            self?.restartAutoAnimateTimer()
+        }
+    }
+
+    private func nextAutoAnimateInterval() -> TimeInterval {
         let interval = autoAnimateInterval()
-        autoAnimateTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            guard self.shouldRunIdleAnimation() else { return }
-            self.animate()
-        }
-    }
-
-    private func shouldRunIdleAnimation() -> Bool {
-        guard !isHidden else { return false } // hidden agent should not animate
-        guard agent != nil else { return false } // no loaded agent
-        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let currentPID = ProcessInfo.processInfo.processIdentifier
-        guard frontmostPID == currentPID else { return false } // app-focus rule
-        guard let window = agentView?.window else { return false }
-        let cursor = NSEvent.mouseLocation
-        if window.frame.contains(cursor) { return false } // don't idle while hovering Clippy
-        let windowCenter = CGPoint(x: window.frame.midX, y: window.frame.midY)
-        let dx = cursor.x - windowCenter.x
-        let dy = cursor.y - windowCenter.y
-        let distance = hypot(dx, dy)
-        return distance <= idleCursorProximity() // cursor-proximity rule
-    }
-
-    private func idleCursorProximity() -> CGFloat {
-        let configured = UserDefaults.standard.double(forKey: Self.idleCursorProximityDefaultsKey)
-        if configured > 0 {
-            return CGFloat(configured)
-        }
-        return Self.defaultIdleCursorProximity
+        let lowerBound = max(5, interval * 0.75)
+        let upperBound = max(lowerBound, interval * 2)
+        return TimeInterval.random(in: lowerBound...upperBound)
     }
 }
