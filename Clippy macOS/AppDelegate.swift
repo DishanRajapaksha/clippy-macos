@@ -112,6 +112,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc func showAction(sender: AnyObject) {
+        NSApp.unhide(self)
+        NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(self)
     }
     

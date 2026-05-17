@@ -27,13 +27,24 @@ struct Agent {
     
     init?(agentURL: URL) {
         self.agentURL = agentURL
-        self.soundsURL = agentURL.appendingPathComponent("sounds")
         self.resourceNameWithSuffix = agentURL.lastPathComponent
         self.resourceName = resourceNameWithSuffix.replacingOccurrences(of: ".agent", with: "")
-        
-        let fileURL = agentURL.appendingPathComponent("\(resourceName).acd")
-        let imageURL = agentURL.appendingPathComponent("\(resourceName)_sprite_map.png")
-        
+
+        // Support both layouts:
+        // 1) <name>.agent/<name>.acd
+        // 2) <name>.agent/<name>.agent/<name>.acd (nested zip extraction)
+        let nestedRoot = agentURL.appendingPathComponent(resourceNameWithSuffix, isDirectory: true)
+        let baseURL: URL
+        if FileManager.default.fileExists(atPath: nestedRoot.path) {
+            baseURL = nestedRoot
+        } else {
+            baseURL = agentURL
+        }
+
+        self.soundsURL = baseURL.appendingPathComponent("sounds")
+        let fileURL = baseURL.appendingPathComponent("\(resourceName).acd")
+        let imageURL = baseURL.appendingPathComponent("\(resourceName)_sprite_map.png")
+
         guard let fileContent = try? String(contentsOf: fileURL, encoding: String.Encoding.utf8) else { return nil }
         
         // Character
@@ -165,4 +176,3 @@ extension Agent {
         agentNames().randomElement()
     }
 }
-

@@ -12,6 +12,7 @@ class AgentWindow: NSWindow {
     override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
         level = NSWindow.Level.floating
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         canHide = true
         backingType = .buffered
         isMovable = true
@@ -26,7 +27,7 @@ class AgentWindow: NSWindow {
         
         /// Fixes glitches
         hasShadow = false
-        isOpaque = true
+        isOpaque = false
         delegate = self
     }
     
@@ -37,9 +38,9 @@ class AgentWindow: NSWindow {
 
 extension AgentWindow: NSWindowDelegate {
     func windowDidResignKey(_ notification: Notification) {
-        alphaValue = 0.5
+        alphaValue = 1.0
     }
-    
+
     func windowDidBecomeKey(_ notification: Notification) {
         alphaValue = 1.0
     }

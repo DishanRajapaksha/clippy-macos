@@ -72,7 +72,7 @@ extension AgentViewController {
     }
     
     override func mouseExited(with event: NSEvent) {
-        self.view.superview?.window?.alphaValue = 0.5
+        self.view.superview?.window?.alphaValue = 1.0
     }
     
     @objc func animateAction() {
