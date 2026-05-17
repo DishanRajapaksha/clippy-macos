@@ -2,14 +2,6 @@
 
 Clippy is a native macOS menu bar app that runs classic Microsoft Agent characters.
 
-## What It Does
-
-- Renders Microsoft Agent sprite animations with SpriteKit
-- Plays agent sounds (with mute support)
-- Supports multiple agents and quick switching
-- Supports timed auto-animation from the menu bar
-- Keeps the character at native asset size
-
 ## Controls
 
 - Drag with mouse: move Clippy
@@ -72,16 +64,8 @@ Example:
 
 ## Attributions
 
-First built by:
-
-- Devran "Cosmo" Uenal
-- Twitter: [@maccosmo](http://twitter.com/maccosmo)
-
-- <https://github.com/tanathos/ClippyVS> (C#)
-- <https://github.com/smore-inc/clippy.js> (JavaScript)
-
-Graphics were created by Microsoft.
-
-## Clippy: The Unauthorized Biography
-
-[![Clippy: The Unauthorized Biography](https://img.youtube.com/vi/8bhjNvSSuLM/0.jpg)](https://www.youtube.com/watch?v=8bhjNvSSuLM)
+- Original macOS app: Devran "Cosmo" Uenal ([`@maccosmo`](http://twitter.com/maccosmo))
+- Inspiration:
+  - <https://github.com/tanathos/ClippyVS> (C#)
+  - <https://github.com/smore-inc/clippy.js> (JavaScript)
+- Character/IP attribution: Microsoft
