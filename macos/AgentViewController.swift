@@ -161,6 +161,7 @@ extension AgentViewController {
         var frame = window.frame
         frame.origin.x += dx
         frame.origin.y += dy
+        frame = clampedFrame(frame, in: window)
         window.setFrame(frame, display: true)
 
         let dt = max(event.timestamp - lastDragTimestamp, 0.0001)
@@ -174,6 +175,7 @@ extension AgentViewController {
             lastDragScreenPoint = nil
             lastDragTimestamp = 0
         }
+        applyEdgeSnap()
         applyThrowInertiaIfNeeded()
     }
     
@@ -255,6 +257,7 @@ extension AgentViewController {
             var frame = window.frame
             frame.origin.x += self.dragVelocity.x / 60.0
             frame.origin.y += self.dragVelocity.y / 60.0
+            frame = self.clampedFrame(frame, in: window)
             window.setFrame(frame, display: true)
         }
     }
@@ -262,5 +265,43 @@ extension AgentViewController {
     private func stopInertia() {
         inertiaTimer?.invalidate()
         inertiaTimer = nil
+    }
+
+    private func applyEdgeSnap() {
+        guard let window = view.window else { return }
+        let snapDistance: CGFloat = 18
+        guard let screen = NSScreen.main ?? window.screen else { return }
+        let visible = screen.visibleFrame
+
+        var frame = clampedFrame(window.frame, in: window)
+
+        let leftDistance = abs(frame.minX - visible.minX)
+        let rightDistance = abs(visible.maxX - frame.maxX)
+        let bottomDistance = abs(frame.minY - visible.minY)
+        let topDistance = abs(visible.maxY - frame.maxY)
+
+        if leftDistance <= snapDistance {
+            frame.origin.x = visible.minX
+        } else if rightDistance <= snapDistance {
+            frame.origin.x = visible.maxX - frame.width
+        }
+
+        if bottomDistance <= snapDistance {
+            frame.origin.y = visible.minY
+        } else if topDistance <= snapDistance {
+            frame.origin.y = visible.maxY - frame.height
+        }
+
+        window.setFrame(frame, display: true, animate: true)
+    }
+
+    private func clampedFrame(_ frame: CGRect, in window: NSWindow) -> CGRect {
+        guard let screen = NSScreen.main ?? window.screen else { return frame }
+        let visible = screen.visibleFrame
+
+        var clamped = frame
+        clamped.origin.x = max(visible.minX, min(clamped.origin.x, visible.maxX - clamped.width))
+        clamped.origin.y = max(visible.minY, min(clamped.origin.y, visible.maxY - clamped.height))
+        return clamped
     }
 }
