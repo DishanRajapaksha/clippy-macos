@@ -13,6 +13,10 @@ class AgentViewController: NSViewController {
     var agentView: AgentView
     private var speechPopover: NSPopover?
     private var speechDismissWorkItem: DispatchWorkItem?
+    private var lastDragScreenPoint: CGPoint?
+    private var lastDragTimestamp: TimeInterval = 0
+    private var dragVelocity: CGPoint = .zero
+    private var inertiaTimer: Timer?
     private let quickPhrases = [
         "Need a hand?",
         "You're doing great.",
@@ -134,11 +138,43 @@ extension AgentViewController {
     }
     
     override func mouseDown(with event: NSEvent) {
+        stopInertia()
         if event.clickCount == 2 {
             agentController.animate()
         } else if event.clickCount == 1 {
-            speakRandomPhrase()
+            if (NSApplication.shared.delegate as? AppDelegate)?.isSpeechBubblesEnabled() ?? true {
+                speakRandomPhrase()
+            }
         }
+        lastDragScreenPoint = NSEvent.mouseLocation
+        lastDragTimestamp = event.timestamp
+        dragVelocity = .zero
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let window = view.window, let previous = lastDragScreenPoint else { return }
+        let current = NSEvent.mouseLocation
+        let dx = current.x - previous.x
+        let dy = current.y - previous.y
+        guard dx != 0 || dy != 0 else { return }
+
+        var frame = window.frame
+        frame.origin.x += dx
+        frame.origin.y += dy
+        window.setFrame(frame, display: true)
+
+        let dt = max(event.timestamp - lastDragTimestamp, 0.0001)
+        dragVelocity = CGPoint(x: dx / dt, y: dy / dt)
+        lastDragScreenPoint = current
+        lastDragTimestamp = event.timestamp
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer {
+            lastDragScreenPoint = nil
+            lastDragTimestamp = 0
+        }
+        applyThrowInertiaIfNeeded()
     }
     
     override func rightMouseDown(with event: NSEvent) {
@@ -194,5 +230,37 @@ extension AgentViewController {
         }
         speechDismissWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: work)
+    }
+
+    private func applyThrowInertiaIfNeeded() {
+        guard let window = view.window else { return }
+        let speed = hypot(dragVelocity.x, dragVelocity.y)
+        guard speed > 250 else { return }
+
+        stopInertia()
+        inertiaTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self, weak window] timer in
+            guard let self = self, let window = window else {
+                timer.invalidate()
+                return
+            }
+
+            self.dragVelocity.x *= 0.90
+            self.dragVelocity.y *= 0.90
+
+            if hypot(self.dragVelocity.x, self.dragVelocity.y) < 20 {
+                timer.invalidate()
+                return
+            }
+
+            var frame = window.frame
+            frame.origin.x += self.dragVelocity.x / 60.0
+            frame.origin.y += self.dragVelocity.y / 60.0
+            window.setFrame(frame, display: true)
+        }
+    }
+
+    private func stopInertia() {
+        inertiaTimer?.invalidate()
+        inertiaTimer = nil
     }
 }

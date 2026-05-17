@@ -10,18 +10,29 @@ import Cocoa
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     let applicationName = "Clippy"
+    static let lastUsedAgentDefaultsKey = "LastUsedAgent"
+    static let speechBubblesEnabledDefaultsKey = "SpeechBubblesEnabled"
     var window: NSWindow?
     var statusItem: NSStatusItem?
     var agentsMenuItem: NSMenuItem?
     var autoAnimateMenuItem: NSMenuItem?
     var muteMenuItem: NSMenuItem?
+    var speechBubblesMenuItem: NSMenuItem?
     static var agentController: AgentController?
-    var lastUsedAgent: String?
+    var lastUsedAgent: String? {
+        get {
+            UserDefaults.standard.string(forKey: Self.lastUsedAgentDefaultsKey)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Self.lastUsedAgentDefaultsKey)
+        }
+    }
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         UserDefaults.standard.register(defaults: [
             AgentController.autoAnimateIntervalDefaultsKey: AgentController.defaultAutoAnimateInterval,
-            AgentController.muteDefaultsKey: false
+            AgentController.muteDefaultsKey: false,
+            Self.speechBubblesEnabledDefaultsKey: true
         ])
         
         window = AgentWindow(contentRect: CGRect.zero, styleMask: [], backing: .buffered, defer: true)
@@ -84,12 +95,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         agentsMenuItem = NSMenuItem(title: "Agents", action: nil, keyEquivalent: "")
         autoAnimateMenuItem = NSMenuItem(title: "Auto Animate", action: nil, keyEquivalent: "")
         muteMenuItem = NSMenuItem(title: "Mute", action: #selector(toggleMuteAction(sender:)), keyEquivalent: "")
+        speechBubblesMenuItem = NSMenuItem(title: "Speech Bubbles", action: #selector(toggleSpeechBubblesAction(sender:)), keyEquivalent: "")
         
         statusBarMenu.addItem(withTitle: "Show", action: #selector(showAction(sender:)), keyEquivalent: "")
         statusBarMenu.addItem(withTitle: "Hide", action: #selector(hideAction(sender:)), keyEquivalent: "")
         if let muteItem = muteMenuItem {
             muteItem.state = isMuted() ? .on : .off
             statusBarMenu.addItem(muteItem)
+        }
+        if let speechItem = speechBubblesMenuItem {
+            speechItem.state = isSpeechBubblesEnabled() ? .on : .off
+            statusBarMenu.addItem(speechItem)
         }
         if let autoAnimateItem = autoAnimateMenuItem {
             statusBarMenu.addItem(autoAnimateItem)
@@ -176,6 +192,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setMuted(!isMuted())
     }
 
+    @objc func toggleSpeechBubblesAction(sender: AnyObject) {
+        setSpeechBubblesEnabled(!isSpeechBubblesEnabled())
+    }
+
     func isMuted() -> Bool {
         return UserDefaults.standard.bool(forKey: AgentController.muteDefaultsKey)
     }
@@ -184,6 +204,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(value, forKey: AgentController.muteDefaultsKey)
         AppDelegate.agentController?.isMuted = value
         muteMenuItem?.state = value ? .on : .off
+    }
+
+    func isSpeechBubblesEnabled() -> Bool {
+        UserDefaults.standard.bool(forKey: Self.speechBubblesEnabledDefaultsKey)
+    }
+
+    func setSpeechBubblesEnabled(_ value: Bool) {
+        UserDefaults.standard.set(value, forKey: Self.speechBubblesEnabledDefaultsKey)
+        speechBubblesMenuItem?.state = value ? .on : .off
     }
     
     @objc func selectAgent(sender: AnyObject) {
