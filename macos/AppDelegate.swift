@@ -8,6 +8,7 @@
 
 import Cocoa
 import ServiceManagement
+import SpriteKit
 import UniformTypeIdentifiers
 
 class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
@@ -22,10 +23,11 @@ class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTab
     private let tableView = NSTableView()
     private let animationTableView = NSTableView()
     private let detailLabel = NSTextField(labelWithString: "Select an agent to inspect animations.")
-    private let playButton = NSButton(title: "Play", target: nil, action: nil)
+    private let previewView = AgentView(frame: NSRect(x: 0, y: 0, width: 140, height: 140))
+    private var previewPlaybackID = UUID()
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 760, height: 360))
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 820, height: 460))
         setupTable()
         loadRows()
     }
@@ -58,25 +60,27 @@ class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTab
         tableView.delegate = self
         tableView.dataSource = self
         tableView.usesAlternatingRowBackgroundColors = true
-        tableView.target = self
-        tableView.doubleAction = #selector(agentDoubleClick(sender:))
 
         scroll.documentView = tableView
         splitView.addArrangedSubview(scroll)
 
-        let detailView = NSView(frame: NSRect(x: 0, y: 0, width: 330, height: view.bounds.height))
+        let detailView = NSView(frame: NSRect(x: 0, y: 0, width: 390, height: view.bounds.height))
         detailView.autoresizingMask = [.width, .height]
-        detailLabel.frame = NSRect(x: 12, y: detailView.bounds.height - 34, width: 306, height: 18)
+        detailLabel.frame = NSRect(x: 12, y: detailView.bounds.height - 34, width: 366, height: 18)
         detailLabel.autoresizingMask = [.width, .minYMargin]
         detailView.addSubview(detailLabel)
 
-        let animationScroll = NSScrollView(frame: NSRect(x: 12, y: 52, width: 306, height: detailView.bounds.height - 94))
+        previewView.frame = NSRect(x: 12, y: detailView.bounds.height - 186, width: 140, height: 140)
+        previewView.autoresizingMask = [.maxXMargin, .minYMargin]
+        detailView.addSubview(previewView)
+
+        let animationScroll = NSScrollView(frame: NSRect(x: 12, y: 12, width: 366, height: detailView.bounds.height - 222))
         animationScroll.autoresizingMask = [.width, .height]
         animationScroll.hasVerticalScroller = true
 
         let animationColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("animation"))
         animationColumn.title = "Animation"
-        animationColumn.width = 280
+        animationColumn.width = 340
         animationTableView.addTableColumn(animationColumn)
         animationTableView.delegate = self
         animationTableView.dataSource = self
@@ -85,12 +89,6 @@ class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTab
         animationTableView.doubleAction = #selector(playSelectedAnimation(sender:))
         animationScroll.documentView = animationTableView
         detailView.addSubview(animationScroll)
-
-        playButton.target = self
-        playButton.action = #selector(playSelectedAnimation(sender:))
-        playButton.frame = NSRect(x: 12, y: 14, width: 88, height: 28)
-        playButton.isEnabled = false
-        detailView.addSubview(playButton)
 
         splitView.addArrangedSubview(detailView)
         view.addSubview(splitView)
@@ -135,39 +133,69 @@ class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTab
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
-        guard notification.object as? NSTableView == tableView else {
-            playButton.isEnabled = animationTableView.selectedRow >= 0
+        if notification.object as? NSTableView == animationTableView {
+            playSelectedAnimation(sender: animationTableView)
             return
         }
+
+        guard notification.object as? NSTableView == tableView else { return }
         let row = tableView.selectedRow
         guard row >= 0, row < rows.count, let agent = Agent(resourceName: rows[row].name) else {
             selectedAgent = nil
             detailLabel.stringValue = "Select an agent to inspect animations."
-            playButton.isEnabled = false
             animationTableView.reloadData()
+            previewView.agentSprite.texture = nil
             return
         }
         selectedAgent = agent
         detailLabel.stringValue = "\(agent.resourceName.capitalized): \(agent.animations.count) animations"
+        showPreviewInitialFrame(for: agent)
         animationTableView.reloadData()
-        if !agent.animations.isEmpty {
-            animationTableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-        }
-        playButton.isEnabled = !agent.animations.isEmpty
-    }
-
-    @objc private func agentDoubleClick(sender: AnyObject) {
-        guard let agent = selectedAgent else { return }
-        try? AppDelegate.agentController?.load(name: agent.resourceName)
-        AppDelegate.agentController?.show()
+        animationTableView.deselectAll(self)
     }
 
     @objc private func playSelectedAnimation(sender: AnyObject) {
         guard let agent = selectedAgent else { return }
         let row = animationTableView.selectedRow
         guard row >= 0, let animation = agent.animations[safe: row] else { return }
-        try? AppDelegate.agentController?.load(name: agent.resourceName)
-        AppDelegate.agentController?.play(animation: animation)
+        preview(animation: animation, for: agent)
+    }
+
+    private func showPreviewInitialFrame(for agent: Agent) {
+        previewPlaybackID = UUID()
+        previewView.agentSprite.removeAllActions()
+        previewView.frame.size = CGSize(width: agent.character.width, height: agent.character.height)
+        previewView.agentSprite.size = previewView.frame.size
+        guard let image = try? agent.textureAtIndex(index: 0) else {
+            previewView.agentSprite.texture = nil
+            return
+        }
+        previewView.agentSprite.texture = SKTexture(cgImage: image)
+    }
+
+    private func preview(animation: AgentAnimation, for agent: Agent) {
+        let playbackID = UUID()
+        previewPlaybackID = playbackID
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let actions = animation.frames.compactMap { frame -> SKAction? in
+                guard let image = agent.imageForFrame(frame) else { return nil }
+                let texture = SKTexture(cgImage: image)
+                texture.filteringMode = .nearest
+                return SKAction.animate(with: [texture], timePerFrame: frame.durationInSeconds)
+            }
+
+            DispatchQueue.main.async {
+                guard self.previewPlaybackID == playbackID, !actions.isEmpty else { return }
+                self.previewView.frame.size = CGSize(width: agent.character.width, height: agent.character.height)
+                self.previewView.agentSprite.size = self.previewView.frame.size
+                self.previewView.agentSprite.removeAllActions()
+                self.previewView.agentSprite.run(SKAction.sequence(actions)) {
+                    guard self.previewPlaybackID == playbackID else { return }
+                    self.showPreviewInitialFrame(for: agent)
+                }
+            }
+        }
     }
 }
 
@@ -190,6 +218,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow?
     var statusItem: NSStatusItem?
     var agentsMenuItem: NSMenuItem?
+    var animationsMenuItem: NSMenuItem?
     var autoAnimateMenuItem: NSMenuItem?
     var behaviorMenuItem: NSMenuItem?
     var muteMenuItem: NSMenuItem?
@@ -263,64 +292,105 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let item = NSMenuItem(title: agentName.capitalized,
                                   action: #selector(selectAgent(sender:)),
                                   keyEquivalent: "")
+            item.target = self
             if lastUsedAgent == agentName {
                 item.state = .on
             }
             agentsMenu.addItem(item)
         }
         agentsMenu.addItem(NSMenuItem.separator())
-        agentsMenu.addItem(withTitle: "Reload",
-                           action: #selector(reloadAction(sender:)),
-                           keyEquivalent: "")
+        addMenuItem(to: agentsMenu, title: "Reload", action: #selector(reloadAction(sender:)))
         return agentsMenu
     }
     
     func setupStatusBarMenu() {
-        // Status bar menu
+        statusItem?.menu = createMainMenu(registerMenuItems: true)
+    }
+
+    func createMainMenu(registerMenuItems: Bool = false) -> NSMenu {
         let statusBarMenu = NSMenu(title: "Clippy")
-        agentsMenuItem = NSMenuItem(title: "Agents", action: nil, keyEquivalent: "")
-        autoAnimateMenuItem = NSMenuItem(title: "Auto Animate", action: nil, keyEquivalent: "")
-        behaviorMenuItem = NSMenuItem(title: "Behavior", action: nil, keyEquivalent: "")
-        muteMenuItem = NSMenuItem(title: "Mute", action: #selector(toggleMuteAction(sender:)), keyEquivalent: "")
-        speechBubblesMenuItem = NSMenuItem(title: "Speech Bubbles", action: #selector(toggleSpeechBubblesAction(sender:)), keyEquivalent: "")
+        let agentsItem = NSMenuItem(title: "Agents", action: nil, keyEquivalent: "")
+        let animationsItem = NSMenuItem(title: "Animations", action: nil, keyEquivalent: "")
+        let autoAnimateItem = NSMenuItem(title: "Auto Animate", action: nil, keyEquivalent: "")
+        let behaviorItem = NSMenuItem(title: "Behavior", action: nil, keyEquivalent: "")
+        let muteItem = NSMenuItem(title: "Mute", action: #selector(toggleMuteAction(sender:)), keyEquivalent: "")
+        let speechBubblesItem = NSMenuItem(title: "Speech Bubbles", action: #selector(toggleSpeechBubblesAction(sender:)), keyEquivalent: "")
         
-        statusBarMenu.addItem(withTitle: "Show", action: #selector(showAction(sender:)), keyEquivalent: "")
-        statusBarMenu.addItem(withTitle: "Hide", action: #selector(hideAction(sender:)), keyEquivalent: "")
-        if let muteItem = muteMenuItem {
-            muteItem.state = isMuted() ? .on : .off
-            statusBarMenu.addItem(muteItem)
+        if registerMenuItems {
+            agentsMenuItem = agentsItem
+            animationsMenuItem = animationsItem
+            autoAnimateMenuItem = autoAnimateItem
+            behaviorMenuItem = behaviorItem
+            muteMenuItem = muteItem
+            speechBubblesMenuItem = speechBubblesItem
         }
-        if let speechItem = speechBubblesMenuItem {
-            speechItem.state = isSpeechBubblesEnabled() ? .on : .off
-            statusBarMenu.addItem(speechItem)
-        }
-        if let autoAnimateItem = autoAnimateMenuItem {
-            statusBarMenu.addItem(autoAnimateItem)
-            statusBarMenu.setSubmenu(createAutoAnimateMenu(), for: autoAnimateItem)
-        }
-        if let behaviorItem = behaviorMenuItem {
-            statusBarMenu.addItem(behaviorItem)
-            statusBarMenu.setSubmenu(createBehaviorMenu(), for: behaviorItem)
-        }
+
+        addMenuItem(to: statusBarMenu, title: "Show", action: #selector(showAction(sender:)))
+        addMenuItem(to: statusBarMenu, title: "Hide", action: #selector(hideAction(sender:)))
+
+        muteItem.target = self
+        muteItem.state = isMuted() ? .on : .off
+        statusBarMenu.addItem(muteItem)
+
+        speechBubblesItem.target = self
+        speechBubblesItem.state = isSpeechBubblesEnabled() ? .on : .off
+        statusBarMenu.addItem(speechBubblesItem)
+
+        statusBarMenu.addItem(autoAnimateItem)
+        statusBarMenu.setSubmenu(createAutoAnimateMenu(), for: autoAnimateItem)
+
+        statusBarMenu.addItem(behaviorItem)
+        statusBarMenu.setSubmenu(createBehaviorMenu(), for: behaviorItem)
+
         statusBarMenu.addItem(NSMenuItem.separator())
-        guard let menuItem = agentsMenuItem else  { return }
-        statusBarMenu.addItem(menuItem)
-        statusBarMenu.addItem(withTitle: "Show in Finder",
-                           action: #selector(openFolderAction(sender:)),
-                           keyEquivalent: "")
-        statusBarMenu.addItem(withTitle: "Import Agent…",
-                              action: #selector(importAgentAction(sender:)),
-                              keyEquivalent: "")
-        statusBarMenu.addItem(withTitle: "Agent Previews…",
-                              action: #selector(showAgentPreviewsAction(sender:)),
-                              keyEquivalent: "")
+        statusBarMenu.addItem(agentsItem)
+        statusBarMenu.setSubmenu(createAgentsMenu(), for: agentsItem)
+        statusBarMenu.addItem(animationsItem)
+        statusBarMenu.setSubmenu(createAnimationsMenu(), for: animationsItem)
+        addMenuItem(to: statusBarMenu, title: "Show in Finder", action: #selector(openFolderAction(sender:)))
+        addMenuItem(to: statusBarMenu, title: "Import Agent…", action: #selector(importAgentAction(sender:)))
+        addMenuItem(to: statusBarMenu, title: "Agent Previews…", action: #selector(showAgentPreviewsAction(sender:)))
         statusBarMenu.addItem(NSMenuItem.separator())
-        statusBarMenu.addItem(withTitle: "Quit \(applicationName)", action: #selector(quitAction(sender:)), keyEquivalent: "")
-        
-        // Agents menu
-        statusBarMenu.setSubmenu(createAgentsMenu(), for: menuItem)
-        
-        statusItem?.menu = statusBarMenu
+        addMenuItem(to: statusBarMenu, title: "Quit \(applicationName)", action: #selector(quitAction(sender:)))
+
+        return statusBarMenu
+    }
+
+    func createAnimationsMenu() -> NSMenu {
+        let menu = NSMenu(title: "Animations")
+        guard let agent = AppDelegate.agentController?.agent else {
+            menu.addItem(withTitle: "No Agent loaded.", action: nil, keyEquivalent: "")
+            return menu
+        }
+
+        if agent.animations.isEmpty {
+            menu.addItem(withTitle: "No Animations found.", action: nil, keyEquivalent: "")
+            return menu
+        }
+
+        for animation in agent.animations {
+            let item = NSMenuItem(title: animation.name,
+                                  action: #selector(playAnimationAction(sender:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = animation.name
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    func refreshDynamicMenus() {
+        agentsMenuItem?.submenu = createAgentsMenu()
+        animationsMenuItem?.submenu = createAnimationsMenu()
+        autoAnimateMenuItem?.submenu = createAutoAnimateMenu()
+        behaviorMenuItem?.submenu = createBehaviorMenu()
+    }
+
+    @discardableResult
+    private func addMenuItem(to menu: NSMenu, title: String, action: Selector?) -> NSMenuItem {
+        let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+        item.target = self
+        return item
     }
 
     func createAutoAnimateMenu() -> NSMenu {
@@ -335,6 +405,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 action: #selector(selectAutoAnimateInterval(sender:)),
                 keyEquivalent: ""
             )
+            item.target = self
             item.representedObject = interval
             item.state = abs(current - interval) < 0.001 ? .on : .off
             menu.addItem(item)
@@ -342,6 +413,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
         let disableItem = NSMenuItem(title: "Off", action: #selector(disableAutoAnimate(sender:)), keyEquivalent: "")
+        disableItem.target = self
         disableItem.state = configured == 0 ? .on : .off
         menu.addItem(disableItem)
         return menu
@@ -350,24 +422,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func createBehaviorMenu() -> NSMenu {
         let menu = NSMenu(title: "Behavior")
         let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLoginAction(sender:)), keyEquivalent: "")
+        launchItem.target = self
         launchItem.state = isLaunchAtLoginEnabled() ? .on : .off
         menu.addItem(launchItem)
 
         let alwaysOnTopItem = NSMenuItem(title: "Always on Top", action: #selector(toggleAlwaysOnTopAction(sender:)), keyEquivalent: "")
+        alwaysOnTopItem.target = self
         alwaysOnTopItem.state = isAlwaysOnTopEnabled() ? .on : .off
         menu.addItem(alwaysOnTopItem)
 
         let allSpacesItem = NSMenuItem(title: "Join All Spaces", action: #selector(toggleJoinAllSpacesAction(sender:)), keyEquivalent: "")
+        allSpacesItem.target = self
         allSpacesItem.state = isJoinAllSpacesEnabled() ? .on : .off
         menu.addItem(allSpacesItem)
 
         menu.addItem(NSMenuItem.separator())
 
         let inertiaItem = NSMenuItem(title: "Throw Inertia", action: #selector(toggleThrowInertiaAction(sender:)), keyEquivalent: "")
+        inertiaItem.target = self
         inertiaItem.state = isThrowInertiaEnabled() ? .on : .off
         menu.addItem(inertiaItem)
 
         let snapItem = NSMenuItem(title: "Edge Snap", action: #selector(toggleEdgeSnapAction(sender:)), keyEquivalent: "")
+        snapItem.target = self
         snapItem.state = isEdgeSnapEnabled() ? .on : .off
         menu.addItem(snapItem)
         return menu
@@ -378,9 +455,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc func reloadAction(sender: AnyObject) {
-        agentsMenuItem?.submenu = createAgentsMenu()
-        autoAnimateMenuItem?.submenu = createAutoAnimateMenu()
-        behaviorMenuItem?.submenu = createBehaviorMenu()
+        refreshDynamicMenus()
     }
 
     @objc func selectAutoAnimateInterval(sender: AnyObject) {
@@ -396,6 +471,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         AppDelegate.agentController?.autoAnimateTimer?.invalidate()
         AppDelegate.agentController?.autoAnimateTimer = nil
         autoAnimateMenuItem?.submenu = createAutoAnimateMenu()
+    }
+
+    @objc func playAnimationAction(sender: AnyObject) {
+        guard let menuItem = sender as? NSMenuItem,
+              let name = menuItem.representedObject as? String,
+              let animation = AppDelegate.agentController?.agent?.findAnimation(name) else { return }
+        AppDelegate.agentController?.play(animation: animation)
     }
     
     @objc func openFolderAction(sender: AnyObject) {
@@ -644,6 +726,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             window?.makeKeyAndOrderFront(self)
         }
         
-        agentsMenuItem?.submenu = createAgentsMenu()
+        refreshDynamicMenus()
     }
 }

@@ -23,7 +23,9 @@ extension AgentViewController: AgentControllerDelegate {
         let newSize = CGSize(width: agent.character.width, height: agent.character.height)
         var rect = CGRect(origin: oldRect.origin, size: newSize)
 
-        if let savedFrame = (NSApplication.shared.delegate as? AppDelegate)?.savedWindowFrame() {
+        if oldRect.origin.x > 0 || oldRect.origin.y > 0 {
+            rect = (NSApplication.shared.delegate as? AppDelegate)?.clampedWindowFrame(rect, for: window) ?? rect
+        } else if let savedFrame = (NSApplication.shared.delegate as? AppDelegate)?.savedWindowFrame() {
             rect.origin = savedFrame.origin
             rect = (NSApplication.shared.delegate as? AppDelegate)?.clampedWindowFrame(rect, for: window) ?? rect
         } else if let screen = NSScreen.main ?? window.screen {
@@ -41,7 +43,10 @@ extension AgentViewController: AgentControllerDelegate {
     }
     
     func didLoadAgent(agent: Agent) {
-        (NSApplication.shared.delegate as? AppDelegate)?.lastUsedAgent = agent.resourceName
+        if let appDelegate = NSApplication.shared.delegate as? AppDelegate {
+            appDelegate.lastUsedAgent = agent.resourceName
+            appDelegate.refreshDynamicMenus()
+        }
     }
     
     func handleHide() {

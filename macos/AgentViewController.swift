@@ -190,27 +190,8 @@ extension AgentViewController {
     }
     
     override func rightMouseDown(with event: NSEvent) {
-        guard let agent = agentController.agent else { return }
-        
-        let menu = NSMenu(title: "Agent")
-        menu.addItem(withTitle: "Animate!", action: #selector(animateAction), keyEquivalent: "")
-        menu.addItem(withTitle: "Idle Animation", action: #selector(idleAnimationAction), keyEquivalent: "")
-        menu.addItem(withTitle: "Say Something", action: #selector(saySomethingAction), keyEquivalent: "")
-        menu.addItem(NSMenuItem.separator())
-
-        let animationMenu = NSMenu(title: "Animations")
-        for animation in commonAnimations(from: agent) {
-            let item = NSMenuItem(title: animation.name, action: #selector(playAnimationMenuAction(sender:)), keyEquivalent: "")
-            item.representedObject = animation.name
-            animationMenu.addItem(item)
-        }
-        let animationsItem = NSMenuItem(title: "Animations", action: nil, keyEquivalent: "")
-        animationsItem.submenu = animationMenu
-        animationsItem.isEnabled = !animationMenu.items.isEmpty
-        menu.addItem(animationsItem)
-
-        menu.addItem(withTitle: "Change Agent", action: #selector(chooseAssistantAction), keyEquivalent: "")
-        menu.addItem(withTitle: "Hide", action: #selector(hideAction(sender:)), keyEquivalent: "")
+        guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else { return }
+        let menu = appDelegate.createMainMenu()
         NSMenu.popUpContextMenu(menu, with: event, for: agentView)
     }
     
@@ -231,25 +212,6 @@ extension AgentViewController {
 
     @objc private func saySomethingAction() {
         speakRandomPhrase()
-    }
-
-    @objc private func playAnimationMenuAction(sender: NSMenuItem) {
-        guard let name = sender.representedObject as? String,
-              let animation = agentController.agent?.findAnimation(name) else { return }
-        agentController.play(animation: animation)
-    }
-
-    private func commonAnimations(from agent: Agent) -> [AgentAnimation] {
-        let preferredNames = [
-            "Greeting", "Wave", "GetAttention", "Alert", "Thinking", "Processing",
-            "Explain", "GestureLeft", "GestureRight", "GestureUp", "GestureDown"
-        ]
-        var animations = preferredNames.compactMap { agent.findAnimation($0) }
-        let existingNames = Set(animations.map { $0.name })
-        animations.append(contentsOf: agent.animations
-            .filter { !existingNames.contains($0.name) && !$0.name.localizedCaseInsensitiveContains("idle") }
-            .prefix(max(0, 12 - animations.count)))
-        return animations
     }
 
     private func speakRandomPhrase() {
