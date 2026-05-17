@@ -29,7 +29,9 @@ build:
 		build
 
 run: build
-	open "$(APP)"
+	-pkill -f "$(APP)/Contents/MacOS/Clippy" || true
+	sleep 0.4
+	open "$(APP)" || (sleep 0.6 && open "$(APP)")
 
 clean:
 	xcodebuild \
