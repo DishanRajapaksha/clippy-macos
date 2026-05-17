@@ -8,6 +8,77 @@
 
 import Cocoa
 
+class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
+    struct PreviewRow {
+        let name: String
+        let size: String
+        let animations: String
+    }
+
+    private var rows: [PreviewRow] = []
+    private let tableView = NSTableView()
+
+    override func loadView() {
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 320))
+        setupTable()
+        loadRows()
+    }
+
+    private func setupTable() {
+        let scroll = NSScrollView(frame: view.bounds)
+        scroll.autoresizingMask = [.width, .height]
+        scroll.hasVerticalScroller = true
+
+        let nameColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
+        nameColumn.title = "Name"
+        nameColumn.width = 220
+
+        let sizeColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("size"))
+        sizeColumn.title = "Size"
+        sizeColumn.width = 120
+
+        let animColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("animations"))
+        animColumn.title = "Animations"
+        animColumn.width = 140
+
+        tableView.addTableColumn(nameColumn)
+        tableView.addTableColumn(sizeColumn)
+        tableView.addTableColumn(animColumn)
+        tableView.delegate = self
+        tableView.dataSource = self
+        tableView.usesAlternatingRowBackgroundColors = true
+
+        scroll.documentView = tableView
+        view.addSubview(scroll)
+    }
+
+    private func loadRows() {
+        rows = Agent.agentNames().compactMap { name in
+            guard let agent = Agent(resourceName: name) else { return nil }
+            let size = "\(agent.character.width)x\(agent.character.height)"
+            return PreviewRow(name: name, size: size, animations: "\(agent.animations.count)")
+        }
+        tableView.reloadData()
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard row < rows.count else { return nil }
+        let item = rows[row]
+        let identifier = tableColumn?.identifier ?? NSUserInterfaceItemIdentifier("col")
+        let cell = NSTextField(labelWithString: "")
+        cell.identifier = identifier
+        switch identifier.rawValue {
+        case "name": cell.stringValue = item.name
+        case "size": cell.stringValue = item.size
+        case "animations": cell.stringValue = item.animations
+        default: cell.stringValue = ""
+        }
+        return cell
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     let applicationName = "Clippy"
     static let lastUsedAgentDefaultsKey = "LastUsedAgent"
@@ -18,6 +89,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var autoAnimateMenuItem: NSMenuItem?
     var muteMenuItem: NSMenuItem?
     var speechBubblesMenuItem: NSMenuItem?
+    var previewWindowController: NSWindowController?
     static var agentController: AgentController?
     var lastUsedAgent: String? {
         get {
@@ -118,6 +190,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusBarMenu.addItem(withTitle: "Show in Finder",
                            action: #selector(openFolderAction(sender:)),
                            keyEquivalent: "")
+        statusBarMenu.addItem(withTitle: "Import Agent…",
+                              action: #selector(importAgentAction(sender:)),
+                              keyEquivalent: "")
+        statusBarMenu.addItem(withTitle: "Agent Previews…",
+                              action: #selector(showAgentPreviewsAction(sender:)),
+                              keyEquivalent: "")
         statusBarMenu.addItem(NSMenuItem.separator())
         statusBarMenu.addItem(withTitle: "Quit \(applicationName)", action: #selector(quitAction(sender:)), keyEquivalent: "")
         
@@ -177,6 +255,48 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc func openFolderAction(sender: AnyObject) {
         NSWorkspace.shared.open(Agent.agentsURL())
+    }
+
+    @objc func importAgentAction(sender: AnyObject) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.allowedFileTypes = ["zip", "agent"]
+        panel.prompt = "Import"
+
+        guard panel.runModal() == .OK else { return }
+        let fm = FileManager.default
+        let agentsURL = Agent.agentsURL()
+
+        for url in panel.urls {
+            if url.pathExtension == "zip" {
+                let destination = agentsURL.appendingPathComponent(url.lastPathComponent)
+                try? fm.removeItem(at: destination)
+                try? fm.copyItem(at: url, to: destination)
+                _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/unzip"),
+                                     arguments: ["-o", destination.path, "-d", agentsURL.path])
+            } else if url.pathExtension == "agent" || url.hasDirectoryPath {
+                let destination = agentsURL.appendingPathComponent(url.lastPathComponent)
+                try? fm.removeItem(at: destination)
+                try? fm.copyItem(at: url, to: destination)
+            }
+        }
+        reloadAction(sender: self)
+    }
+
+    @objc func showAgentPreviewsAction(sender: AnyObject) {
+        let vc = AgentPreviewViewController()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 320),
+                              styleMask: [.titled, .closable, .resizable],
+                              backing: .buffered,
+                              defer: false)
+        window.title = "Agent Previews"
+        window.contentViewController = vc
+        let controller = NSWindowController(window: window)
+        previewWindowController = controller
+        controller.showWindow(self)
+        NSApp.activate(ignoringOtherApps: true)
     }
     
     @objc func hideAction(sender: AnyObject) {
