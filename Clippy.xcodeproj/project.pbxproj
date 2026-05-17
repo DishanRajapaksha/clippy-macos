@@ -105,19 +105,19 @@
 			isa = PBXGroup;
 			children = (
 				45A72A6A232257DB007DE9DA /* README.md */,
-				453D7F72231F189400995AB3 /* Clippy Shared */,
+				453D7F72231F189400995AB3 /* Clippy shared */,
 				453D7F8E231F189600995AB3 /* Clippy macOS */,
 				453D7F7C231F189600995AB3 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		453D7F72231F189400995AB3 /* Clippy Shared */ = {
+		453D7F72231F189400995AB3 /* Clippy shared */ = {
 			isa = PBXGroup;
 			children = (
 				45A72A6623223959007DE9DA /* AgentParser */,
 				459AC4932325799600C43B06 /* CGImageExtensions.swift */,
 			);
-			path = "Clippy Shared";
+			path = shared;
 			sourceTree = "<group>";
 		};
 		453D7F7C231F189600995AB3 /* Products */ = {
@@ -144,7 +144,7 @@
 				453D7FC8231F912800995AB3 /* Supporting Files */,
 				45491A582325D842007E04E2 /* AgentBalloonViewController.swift */,
 			);
-			path = "Clippy macOS";
+			path = macos;
 			sourceTree = "<group>";
 		};
 		453D7FC7231F911D00995AB3 /* Supporting Files */ = {
@@ -452,7 +452,7 @@
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = Z3ZG8RPGHF;
 				ENABLE_HARDENED_RUNTIME = YES;
-				INFOPLIST_FILE = "Clippy macOS/Info.plist";
+				INFOPLIST_FILE = "macos/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -475,7 +475,7 @@
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = Z3ZG8RPGHF;
 				ENABLE_HARDENED_RUNTIME = YES;
-				INFOPLIST_FILE = "Clippy macOS/Info.plist";
+				INFOPLIST_FILE = "macos/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
