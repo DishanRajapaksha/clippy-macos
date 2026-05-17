@@ -17,6 +17,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var lastUsedAgent: String?
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        UserDefaults.standard.register(defaults: [
+            AgentController.autoAnimateIntervalDefaultsKey: AgentController.defaultAutoAnimateInterval
+        ])
         
         window = AgentWindow(contentRect: CGRect.zero, styleMask: [], backing: .buffered, defer: true)
         window?.title = applicationName

@@ -11,7 +11,11 @@ import AVKit
 import SpriteKit
 
 class AgentController {
+    static let autoAnimateIntervalDefaultsKey = "AutoAnimateIntervalSeconds"
+    static let defaultAutoAnimateInterval: TimeInterval = 12.0
+
     var isMuted = false
+    var autoAnimateTimer: Timer?
     var player: AVPlayer = {
         return AVPlayer()
     }()
@@ -36,6 +40,7 @@ class AgentController {
         delegate?.willLoadAgent(agent: agent)
         self.agent = agent
         showInitialFrame()
+        restartAutoAnimateTimer()
         delegate?.didLoadAgent(agent: agent)
     }
     
@@ -95,5 +100,21 @@ class AgentController {
     
     func show() {
         delegate?.handleShow()
+    }
+
+    func autoAnimateInterval() -> TimeInterval {
+        let configured = UserDefaults.standard.double(forKey: Self.autoAnimateIntervalDefaultsKey)
+        return configured > 0 ? configured : Self.defaultAutoAnimateInterval
+    }
+
+    func restartAutoAnimateTimer() {
+        autoAnimateTimer?.invalidate()
+        let interval = autoAnimateInterval()
+        autoAnimateTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            guard !self.isHidden else { return }
+            guard self.agent != nil else { return }
+            self.animate()
+        }
     }
 }
