@@ -169,9 +169,12 @@ class AgentController {
     private func shouldRunIdleAnimation() -> Bool {
         guard !isHidden else { return false } // hidden agent should not animate
         guard agent != nil else { return false } // no loaded agent
-        guard NSApp.isActive else { return false } // app-focus rule
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        guard frontmostPID == currentPID else { return false } // app-focus rule
         guard let window = agentView?.window else { return false }
         let cursor = NSEvent.mouseLocation
+        if window.frame.contains(cursor) { return false } // don't idle while hovering Clippy
         let windowCenter = CGPoint(x: window.frame.midX, y: window.frame.midY)
         let dx = cursor.x - windowCenter.x
         let dy = cursor.y - windowCenter.y
