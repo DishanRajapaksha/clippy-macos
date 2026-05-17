@@ -31,6 +31,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         UserDefaults.standard.register(defaults: [
             AgentController.autoAnimateIntervalDefaultsKey: AgentController.defaultAutoAnimateInterval,
+            AgentController.idleCursorProximityDefaultsKey: AgentController.defaultIdleCursorProximity,
             AgentController.muteDefaultsKey: false,
             Self.speechBubblesEnabledDefaultsKey: true
         ])

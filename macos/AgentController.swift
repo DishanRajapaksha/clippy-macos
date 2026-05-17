@@ -13,6 +13,8 @@ import SpriteKit
 class AgentController {
     static let autoAnimateIntervalDefaultsKey = "AutoAnimateIntervalSeconds"
     static let defaultAutoAnimateInterval: TimeInterval = 12.0
+    static let idleCursorProximityDefaultsKey = "IdleCursorProximityPoints"
+    static let defaultIdleCursorProximity: CGFloat = 180.0
     static let muteDefaultsKey = "IsMuted"
 
     var isMuted = false
@@ -159,9 +161,29 @@ class AgentController {
         let interval = autoAnimateInterval()
         autoAnimateTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             guard let self = self else { return }
-            guard !self.isHidden else { return }
-            guard self.agent != nil else { return }
+            guard self.shouldRunIdleAnimation() else { return }
             self.animate()
         }
+    }
+
+    private func shouldRunIdleAnimation() -> Bool {
+        guard !isHidden else { return false } // hidden agent should not animate
+        guard agent != nil else { return false } // no loaded agent
+        guard NSApp.isActive else { return false } // app-focus rule
+        guard let window = agentView?.window else { return false }
+        let cursor = NSEvent.mouseLocation
+        let windowCenter = CGPoint(x: window.frame.midX, y: window.frame.midY)
+        let dx = cursor.x - windowCenter.x
+        let dy = cursor.y - windowCenter.y
+        let distance = hypot(dx, dy)
+        return distance <= idleCursorProximity() // cursor-proximity rule
+    }
+
+    private func idleCursorProximity() -> CGFloat {
+        let configured = UserDefaults.standard.double(forKey: Self.idleCursorProximityDefaultsKey)
+        if configured > 0 {
+            return CGFloat(configured)
+        }
+        return Self.defaultIdleCursorProximity
     }
 }
