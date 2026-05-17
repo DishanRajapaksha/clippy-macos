@@ -11,6 +11,7 @@ import SpriteKit
 
 enum AgentError: Error {
     case frameOutOfBounds
+    case invalidSpriteMap
 }
 
 struct Agent {
@@ -94,34 +95,37 @@ struct Agent {
 
 extension Agent {
     var columns: Int {
-        let columns = Int(spriteMap.width) / character.width
-        return columns
+        guard character.width > 0 else { return 0 }
+        return Int(spriteMap.width) / character.width
     }
     var rows: Int {
-        let rows = Int(spriteMap.height) / character.height
-        return rows
+        guard character.height > 0 else { return 0 }
+        return Int(spriteMap.height) / character.height
     }
     
     func textureAtPosition(x: Int, y: Int) throws -> CGImage {
-        guard (0...rows ~= y && 0...columns ~= x) else { throw AgentError.frameOutOfBounds }
+        guard x >= 0, y >= 0, x < columns, y < rows else { throw AgentError.frameOutOfBounds }
         let textureWidth = character.width
         let textureHeight = character.height
         let rect = CGRect(x: x * textureWidth, y: y * textureHeight, width: textureWidth, height: textureHeight)
-        return spriteMap.cropping(to: rect)!
+        guard let image = spriteMap.cropping(to: rect) else { throw AgentError.invalidSpriteMap }
+        return image
     }
     
     func textureAtIndex(index: Int) throws -> CGImage {
+        guard columns > 0 else { throw AgentError.invalidSpriteMap }
         let x = index % columns
         let y = index / columns
-        return try! textureAtPosition(x: x, y: y)
+        return try textureAtPosition(x: x, y: y)
     }
     
-    func imageForFrame(_ frame: AgentFrame) -> CGImage {
-        let cgImages = frame.images.reversed().map{ try! textureAtIndex(index: $0.imageNumber) }
+    func imageForFrame(_ frame: AgentFrame) -> CGImage? {
+        let cgImages = frame.images.reversed().compactMap { try? textureAtIndex(index: $0.imageNumber) }
+        guard !cgImages.isEmpty else { return try? textureAtIndex(index: 0) }
         if let mergedImage = CGImage.mergeImages(cgImages) {
             return mergedImage
         } else {
-            return try! textureAtIndex(index: 0)
+            return try? textureAtIndex(index: 0)
         }
     }
 }

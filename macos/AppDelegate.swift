@@ -8,6 +8,7 @@
 
 import Cocoa
 import ServiceManagement
+import UniformTypeIdentifiers
 
 class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
     struct PreviewRow {
@@ -17,16 +18,25 @@ class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTab
     }
 
     private var rows: [PreviewRow] = []
+    private var selectedAgent: Agent?
     private let tableView = NSTableView()
+    private let animationTableView = NSTableView()
+    private let detailLabel = NSTextField(labelWithString: "Select an agent to inspect animations.")
+    private let playButton = NSButton(title: "Play", target: nil, action: nil)
 
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 320))
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 760, height: 360))
         setupTable()
         loadRows()
     }
 
     private func setupTable() {
-        let scroll = NSScrollView(frame: view.bounds)
+        let splitView = NSSplitView(frame: view.bounds)
+        splitView.autoresizingMask = [.width, .height]
+        splitView.dividerStyle = .thin
+        splitView.isVertical = true
+
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 430, height: view.bounds.height))
         scroll.autoresizingMask = [.width, .height]
         scroll.hasVerticalScroller = true
 
@@ -48,9 +58,42 @@ class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTab
         tableView.delegate = self
         tableView.dataSource = self
         tableView.usesAlternatingRowBackgroundColors = true
+        tableView.target = self
+        tableView.doubleAction = #selector(agentDoubleClick(sender:))
 
         scroll.documentView = tableView
-        view.addSubview(scroll)
+        splitView.addArrangedSubview(scroll)
+
+        let detailView = NSView(frame: NSRect(x: 0, y: 0, width: 330, height: view.bounds.height))
+        detailView.autoresizingMask = [.width, .height]
+        detailLabel.frame = NSRect(x: 12, y: detailView.bounds.height - 34, width: 306, height: 18)
+        detailLabel.autoresizingMask = [.width, .minYMargin]
+        detailView.addSubview(detailLabel)
+
+        let animationScroll = NSScrollView(frame: NSRect(x: 12, y: 52, width: 306, height: detailView.bounds.height - 94))
+        animationScroll.autoresizingMask = [.width, .height]
+        animationScroll.hasVerticalScroller = true
+
+        let animationColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("animation"))
+        animationColumn.title = "Animation"
+        animationColumn.width = 280
+        animationTableView.addTableColumn(animationColumn)
+        animationTableView.delegate = self
+        animationTableView.dataSource = self
+        animationTableView.usesAlternatingRowBackgroundColors = true
+        animationTableView.target = self
+        animationTableView.doubleAction = #selector(playSelectedAnimation(sender:))
+        animationScroll.documentView = animationTableView
+        detailView.addSubview(animationScroll)
+
+        playButton.target = self
+        playButton.action = #selector(playSelectedAnimation(sender:))
+        playButton.frame = NSRect(x: 12, y: 14, width: 88, height: 28)
+        playButton.isEnabled = false
+        detailView.addSubview(playButton)
+
+        splitView.addArrangedSubview(detailView)
+        view.addSubview(splitView)
     }
 
     private func loadRows() {
@@ -62,9 +105,21 @@ class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTab
         tableView.reloadData()
     }
 
-    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        if tableView == animationTableView {
+            return selectedAgent?.animations.count ?? 0
+        }
+        return rows.count
+    }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        if tableView == animationTableView {
+            guard let animation = selectedAgent?.animations[safe: row] else { return nil }
+            let cell = NSTextField(labelWithString: animation.name)
+            cell.identifier = tableColumn?.identifier
+            return cell
+        }
+
         guard row < rows.count else { return nil }
         let item = rows[row]
         let identifier = tableColumn?.identifier ?? NSUserInterfaceItemIdentifier("col")
@@ -77,6 +132,49 @@ class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTab
         default: cell.stringValue = ""
         }
         return cell
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        guard notification.object as? NSTableView == tableView else {
+            playButton.isEnabled = animationTableView.selectedRow >= 0
+            return
+        }
+        let row = tableView.selectedRow
+        guard row >= 0, row < rows.count, let agent = Agent(resourceName: rows[row].name) else {
+            selectedAgent = nil
+            detailLabel.stringValue = "Select an agent to inspect animations."
+            playButton.isEnabled = false
+            animationTableView.reloadData()
+            return
+        }
+        selectedAgent = agent
+        detailLabel.stringValue = "\(agent.resourceName.capitalized): \(agent.animations.count) animations"
+        animationTableView.reloadData()
+        if !agent.animations.isEmpty {
+            animationTableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        }
+        playButton.isEnabled = !agent.animations.isEmpty
+    }
+
+    @objc private func agentDoubleClick(sender: AnyObject) {
+        guard let agent = selectedAgent else { return }
+        try? AppDelegate.agentController?.load(name: agent.resourceName)
+        AppDelegate.agentController?.show()
+    }
+
+    @objc private func playSelectedAnimation(sender: AnyObject) {
+        guard let agent = selectedAgent else { return }
+        let row = animationTableView.selectedRow
+        guard row >= 0, let animation = agent.animations[safe: row] else { return }
+        try? AppDelegate.agentController?.load(name: agent.resourceName)
+        AppDelegate.agentController?.play(animation: animation)
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        guard indices.contains(index) else { return nil }
+        return self[index]
     }
 }
 
@@ -125,7 +223,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if !Agent.agentNames().isEmpty {
             window?.makeKeyAndOrderFront(self)
         }
-        window?.center()
+        if let frame = savedWindowFrame(), let window = window {
+            window.setFrame(clampedWindowFrame(frame, for: window), display: true)
+        } else {
+            window?.center()
+        }
         
         setupStatusBar()
     }
@@ -305,32 +407,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
-        panel.allowedFileTypes = ["zip", "agent"]
+        panel.allowedContentTypes = [.zip, UTType(filenameExtension: "agent")].compactMap { $0 }
         panel.prompt = "Import"
 
         guard panel.runModal() == .OK else { return }
-        let fm = FileManager.default
-        let agentsURL = Agent.agentsURL()
+        var imported: [String] = []
+        var failures: [String] = []
 
         for url in panel.urls {
-            if url.pathExtension == "zip" {
-                let destination = agentsURL.appendingPathComponent(url.lastPathComponent)
-                try? fm.removeItem(at: destination)
-                try? fm.copyItem(at: url, to: destination)
-                _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/unzip"),
-                                     arguments: ["-o", destination.path, "-d", agentsURL.path])
-            } else if url.pathExtension == "agent" || url.hasDirectoryPath {
-                let destination = agentsURL.appendingPathComponent(url.lastPathComponent)
-                try? fm.removeItem(at: destination)
-                try? fm.copyItem(at: url, to: destination)
+            do {
+                let name = try importAgent(from: url)
+                imported.append(name)
+            } catch {
+                failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
             }
         }
         reloadAction(sender: self)
+        presentImportResult(imported: imported, failures: failures)
     }
 
     @objc func showAgentPreviewsAction(sender: AnyObject) {
         let vc = AgentPreviewViewController()
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 320),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 360),
                               styleMask: [.titled, .closable, .resizable],
                               backing: .buffered,
                               defer: false)
@@ -438,6 +536,68 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let frame = NSRectFromString(value)
         guard frame.width > 0, frame.height > 0 else { return nil }
         return frame
+    }
+
+    func clampedWindowFrame(_ frame: CGRect, for window: NSWindow? = nil) -> CGRect {
+        guard let screen = window?.screen ?? NSScreen.main ?? NSScreen.screens.first else { return frame }
+        let visible = screen.visibleFrame
+        var clamped = frame
+        clamped.origin.x = max(visible.minX, min(clamped.origin.x, visible.maxX - clamped.width))
+        clamped.origin.y = max(visible.minY, min(clamped.origin.y, visible.maxY - clamped.height))
+        return clamped
+    }
+
+    private func importAgent(from url: URL) throws -> String {
+        let fm = FileManager.default
+        let agentsURL = Agent.agentsURL()
+        let destination = agentsURL.appendingPathComponent(url.lastPathComponent)
+
+        try? fm.removeItem(at: destination)
+        try fm.copyItem(at: url, to: destination)
+
+        if url.pathExtension == "zip" {
+            let process = try Process.run(URL(fileURLWithPath: "/usr/bin/unzip"),
+                                          arguments: ["-o", destination.path, "-d", agentsURL.path])
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else {
+                throw NSError(domain: "ClippyImport", code: Int(process.terminationStatus), userInfo: [
+                    NSLocalizedDescriptionKey: "unzip failed with status \(process.terminationStatus)"
+                ])
+            }
+        } else if !(url.pathExtension == "agent" || url.hasDirectoryPath) {
+            throw NSError(domain: "ClippyImport", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "unsupported file type"
+            ])
+        }
+
+        let name = normalizedAgentName(from: url)
+        guard Agent(resourceName: name) != nil else {
+            throw NSError(domain: "ClippyImport", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "agent files were copied but could not be loaded"
+            ])
+        }
+        return name
+    }
+
+    private func normalizedAgentName(from url: URL) -> String {
+        var name = url.deletingPathExtension().lastPathComponent
+        if name.hasSuffix(".agent") {
+            name = String(name.dropLast(".agent".count))
+        }
+        return name
+    }
+
+    private func presentImportResult(imported: [String], failures: [String]) {
+        guard !imported.isEmpty || !failures.isEmpty else { return }
+        let title = failures.isEmpty ? "Import Complete" : "Import Finished With Issues"
+        var lines: [String] = []
+        if !imported.isEmpty {
+            lines.append("Imported: \(imported.sorted().joined(separator: ", "))")
+        }
+        if !failures.isEmpty {
+            lines.append("Failed:\n\(failures.joined(separator: "\n"))")
+        }
+        presentAlert(title: title, message: lines.joined(separator: "\n\n"))
     }
 
     func isLaunchAtLoginEnabled() -> Bool {

@@ -59,8 +59,8 @@ class AgentController {
     }
     
     func showInitialFrame() {
-        guard let agent = agent else { return }
-        self.agentView?.agentSprite.texture = SKTexture(cgImage: try! agent.textureAtIndex(index: 0))
+        guard let agent = agent, let image = try? agent.textureAtIndex(index: 0) else { return }
+        self.agentView?.agentSprite.texture = SKTexture(cgImage: image)
     }
     
     func play(animation: AgentAnimation, withSoundEnabled soundEnabled: Bool = true, interruptCurrent: Bool = true, completion: (() -> Void)? = nil) {
@@ -88,7 +88,12 @@ class AgentController {
                     actions.append(audioAction)
                 }
                 
-                let texture = SKTexture(cgImage: agent.imageForFrame(frame))
+                guard let image = agent.imageForFrame(frame) else {
+                    safetyCounter += 1
+                    frameIndex = self.nextFrameIndex(after: frameIndex, in: animation)
+                    continue
+                }
+                let texture = SKTexture(cgImage: image)
                 texture.filteringMode = .nearest
                 let action = SKAction.animate(with: [texture], timePerFrame: frame.durationInSeconds)
                 actions.append(action)
@@ -99,6 +104,11 @@ class AgentController {
             
             DispatchQueue.main.asyncAfter(deadline: .now(), execute: {
                 guard self.playbackID == currentPlaybackID else { return }
+                guard !actions.isEmpty else {
+                    self.isAnimating = false
+                    completion?()
+                    return
+                }
                 self.agentView?.agentSprite.removeAllActions()
                 self.agentView?.agentSprite.run(SKAction.sequence(actions), completion: {
                     guard self.playbackID == currentPlaybackID else { return }

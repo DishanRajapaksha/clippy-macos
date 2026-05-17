@@ -17,13 +17,7 @@ class AgentWindow: NSWindow {
         backingType = .buffered
         isMovable = true
         isMovableByWindowBackground = true
-        let debug = false
-        if debug {
-            backgroundColor = .white
-            styleMask = [.titled]
-        } else {
-            backgroundColor = .clear
-        }
+        backgroundColor = .clear
         
         /// Fixes glitches
         hasShadow = false

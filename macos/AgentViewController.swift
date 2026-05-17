@@ -19,9 +19,13 @@ class AgentViewController: NSViewController {
     private var inertiaTimer: Timer?
     private let quickPhrases = [
         "Need a hand?",
+        "I found a few things you might like.",
+        "That looks important.",
+        "I can play an animation for this.",
+        "Right-click me for more options.",
+        "Need a quick break?",
         "You're doing great.",
         "Want to animate me?",
-        "Tip: right-click for Animate!",
         "Let's get this done."
     ]
     
@@ -215,11 +219,10 @@ extension AgentViewController {
     }
     
     @objc func optionsAction(sender: AnyObject) {
-        let viewController = BalloonViewController(text: "Options are currently minimal.")
-        print(viewController)
+        let viewController = BalloonViewController(text: "Options are currently minimal.", balloon: agentController.agent?.balloon)
         let popOver = NSPopover()
         popOver.behavior = .semitransient
-        popOver.contentSize = CGSize(width: 200, height: 300)
+        popOver.contentSize = viewController.contentSize
         popOver.animates = true
         popOver.contentViewController = viewController
         let rect = self.view.frame
@@ -258,13 +261,13 @@ extension AgentViewController {
         speechDismissWorkItem?.cancel()
         speechPopover?.close()
 
-        let bubbleVC = BalloonViewController(text: text)
+        let bubbleVC = BalloonViewController(text: text, balloon: agentController.agent?.balloon)
         let popover = NSPopover()
         popover.behavior = .semitransient
-        popover.contentSize = CGSize(width: 260, height: 80)
+        popover.contentSize = bubbleVC.contentSize
         popover.animates = true
         popover.contentViewController = bubbleVC
-        popover.show(relativeTo: agentView.bounds, of: agentView, preferredEdge: .maxY)
+        popover.show(relativeTo: agentView.bounds, of: agentView, preferredEdge: preferredSpeechEdge(for: bubbleVC.contentSize))
         speechPopover = popover
 
         let work = DispatchWorkItem { [weak self] in
@@ -272,6 +275,22 @@ extension AgentViewController {
         }
         speechDismissWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: work)
+    }
+
+    private func preferredSpeechEdge(for size: CGSize) -> NSRectEdge {
+        guard let window = view.window, let screen = window.screen ?? NSScreen.main else { return .maxY }
+        let visible = screen.visibleFrame
+        let frame = window.frame
+        if visible.maxY - frame.maxY >= size.height + 8 {
+            return .maxY
+        }
+        if frame.minY - visible.minY >= size.height + 8 {
+            return .minY
+        }
+        if frame.minX - visible.minX >= size.width + 8 {
+            return .minX
+        }
+        return .maxX
     }
 
     private func applyThrowInertiaIfNeeded() {

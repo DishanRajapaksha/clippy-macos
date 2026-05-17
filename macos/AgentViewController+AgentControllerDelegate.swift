@@ -23,8 +23,11 @@ extension AgentViewController: AgentControllerDelegate {
         let newSize = CGSize(width: agent.character.width, height: agent.character.height)
         var rect = CGRect(origin: oldRect.origin, size: newSize)
 
-        // Keep the character reliably visible on-screen.
-        if let screen = NSScreen.main ?? window.screen {
+        if let savedFrame = (NSApplication.shared.delegate as? AppDelegate)?.savedWindowFrame() {
+            rect.origin = savedFrame.origin
+            rect = (NSApplication.shared.delegate as? AppDelegate)?.clampedWindowFrame(rect, for: window) ?? rect
+        } else if let screen = NSScreen.main ?? window.screen {
+            // Keep the character reliably visible on-screen.
             let visible = screen.visibleFrame
             let x = visible.maxX - newSize.width - 24
             let y = visible.minY + 24
