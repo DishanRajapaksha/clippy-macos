@@ -42,6 +42,9 @@ class AgentViewController: NSViewController {
     override func viewDidAppear() {
         super.viewDidAppear()
         view.window?.makeFirstResponder(self)
+        if let appDelegate = NSApplication.shared.delegate as? AppDelegate {
+            agentController.isMuted = appDelegate.isMuted()
+        }
         
         let lastUsedName = (NSApplication.shared.delegate as? AppDelegate)?.lastUsedAgent
         let name = lastUsedName ?? Agent.randomAgentName()
@@ -131,21 +134,9 @@ extension AgentViewController {
         guard let _ = agentController.agent else { return }
         
         let menu = NSMenu(title: "Agent")
-        let menuItems = [
-            NSMenuItem(title: "Hide",
-                       action: #selector(hideAction(sender:)),
-                       keyEquivalent: ""),
-            NSMenuItem.separator(),
-            NSMenuItem(title: "Options…",
-                       action: nil,
-                       keyEquivalent: ""),
-            NSMenuItem(title: "Choose Assistant…",
-                       action: #selector(chooseAssistantAction),
-                       keyEquivalent: ""),
-            NSMenuItem(title: "Animate!",
-                       action: #selector(animateAction),
-                       keyEquivalent: "")
-        ]
+        let menuItems = [NSMenuItem(title: "Animate!",
+                                    action: #selector(animateAction),
+                                    keyEquivalent: "")]
         
         for (index, menuItem) in menuItems.enumerated() {
             menu.insertItem(menuItem, at: index)

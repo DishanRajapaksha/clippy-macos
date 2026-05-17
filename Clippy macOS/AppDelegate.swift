@@ -13,12 +13,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow?
     var statusItem: NSStatusItem?
     var agentsMenuItem: NSMenuItem?
+    var autoAnimateMenuItem: NSMenuItem?
+    var muteMenuItem: NSMenuItem?
     static var agentController: AgentController?
     var lastUsedAgent: String?
     
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         UserDefaults.standard.register(defaults: [
-            AgentController.autoAnimateIntervalDefaultsKey: AgentController.defaultAutoAnimateInterval
+            AgentController.autoAnimateIntervalDefaultsKey: AgentController.defaultAutoAnimateInterval,
+            AgentController.muteDefaultsKey: false
         ])
         
         window = AgentWindow(contentRect: CGRect.zero, styleMask: [], backing: .buffered, defer: true)
@@ -79,10 +82,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Status bar menu
         let statusBarMenu = NSMenu(title: "Clippy")
         agentsMenuItem = NSMenuItem(title: "Agents", action: nil, keyEquivalent: "")
+        autoAnimateMenuItem = NSMenuItem(title: "Auto Animate", action: nil, keyEquivalent: "")
+        muteMenuItem = NSMenuItem(title: "Mute", action: #selector(toggleMuteAction(sender:)), keyEquivalent: "")
         
         statusBarMenu.addItem(withTitle: "Show", action: #selector(showAction(sender:)), keyEquivalent: "")
         statusBarMenu.addItem(withTitle: "Hide", action: #selector(hideAction(sender:)), keyEquivalent: "")
-        statusBarMenu.addItem(withTitle: "Mute", action: #selector(toggleMuteAction(sender:)), keyEquivalent: "")
+        if let muteItem = muteMenuItem {
+            muteItem.state = isMuted() ? .on : .off
+            statusBarMenu.addItem(muteItem)
+        }
+        if let autoAnimateItem = autoAnimateMenuItem {
+            statusBarMenu.addItem(autoAnimateItem)
+            statusBarMenu.setSubmenu(createAutoAnimateMenu(), for: autoAnimateItem)
+        }
         statusBarMenu.addItem(NSMenuItem.separator())
         guard let menuItem = agentsMenuItem else  { return }
         statusBarMenu.addItem(menuItem)
@@ -97,6 +109,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         statusItem?.menu = statusBarMenu
     }
+
+    func createAutoAnimateMenu() -> NSMenu {
+        let menu = NSMenu(title: "Auto Animate")
+        let configured = UserDefaults.standard.double(forKey: AgentController.autoAnimateIntervalDefaultsKey)
+        let current = configured > 0 ? configured : AgentController.defaultAutoAnimateInterval
+
+        let options: [TimeInterval] = [5, 10, 15, 30, 60]
+        for interval in options {
+            let item = NSMenuItem(
+                title: "Every \(Int(interval))s",
+                action: #selector(selectAutoAnimateInterval(sender:)),
+                keyEquivalent: ""
+            )
+            item.representedObject = interval
+            item.state = abs(current - interval) < 0.001 ? .on : .off
+            menu.addItem(item)
+        }
+
+        menu.addItem(NSMenuItem.separator())
+        let disableItem = NSMenuItem(title: "Off", action: #selector(disableAutoAnimate(sender:)), keyEquivalent: "")
+        disableItem.state = configured == 0 ? .on : .off
+        menu.addItem(disableItem)
+        return menu
+    }
     
     @objc func quitAction(sender: AnyObject) {
         NSApplication.shared.terminate(self)
@@ -104,6 +140,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc func reloadAction(sender: AnyObject) {
         agentsMenuItem?.submenu = createAgentsMenu()
+        autoAnimateMenuItem?.submenu = createAutoAnimateMenu()
+    }
+
+    @objc func selectAutoAnimateInterval(sender: AnyObject) {
+        guard let menuItem = sender as? NSMenuItem,
+              let interval = menuItem.representedObject as? TimeInterval else { return }
+        UserDefaults.standard.set(interval, forKey: AgentController.autoAnimateIntervalDefaultsKey)
+        AppDelegate.agentController?.restartAutoAnimateTimer()
+        autoAnimateMenuItem?.submenu = createAutoAnimateMenu()
+    }
+
+    @objc func disableAutoAnimate(sender: AnyObject) {
+        UserDefaults.standard.set(0, forKey: AgentController.autoAnimateIntervalDefaultsKey)
+        AppDelegate.agentController?.autoAnimateTimer?.invalidate()
+        AppDelegate.agentController?.autoAnimateTimer = nil
+        autoAnimateMenuItem?.submenu = createAutoAnimateMenu()
     }
     
     @objc func openFolderAction(sender: AnyObject) {
@@ -121,11 +173,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc func toggleMuteAction(sender: AnyObject) {
-        guard let menuItem = sender as? NSMenuItem else { return }
-        guard let isMuted = AppDelegate.agentController?.isMuted else { return }
-        let newValue = !isMuted
-        AppDelegate.agentController?.isMuted = newValue
-        menuItem.state = newValue ? .on : .off
+        setMuted(!isMuted())
+    }
+
+    func isMuted() -> Bool {
+        return UserDefaults.standard.bool(forKey: AgentController.muteDefaultsKey)
+    }
+
+    func setMuted(_ value: Bool) {
+        UserDefaults.standard.set(value, forKey: AgentController.muteDefaultsKey)
+        AppDelegate.agentController?.isMuted = value
+        muteMenuItem?.state = value ? .on : .off
     }
     
     @objc func selectAgent(sender: AnyObject) {
