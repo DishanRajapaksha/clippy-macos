@@ -38,7 +38,7 @@ Useful targets:
 GitHub Actions publishes unsigned macOS binaries from `.github/workflows/publish-binaries.yml`.
 
 - Run `Publish Binaries` manually to produce a downloadable workflow artifact.
-- Push a version tag such as `v0.1.0` to create a GitHub release with `Clippy.app` zipped under `dist/`.
+- Push a version tag such as `0.1.0` to create a GitHub release with `Clippy.app` zipped under `dist/`.
 
 Local package build:
 
