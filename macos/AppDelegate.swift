@@ -25,6 +25,8 @@ class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTab
     private let detailLabel = NSTextField(labelWithString: "Select an agent to inspect animations.")
     private let previewView = AgentView(frame: NSRect(x: 0, y: 0, width: 140, height: 140))
     private var previewPlaybackID = UUID()
+    private var previewTextureCache: [Int: SKTexture] = [:]
+    private let previewTextureCacheLock = NSLock()
 
     override func loadView() {
         view = NSView(frame: NSRect(x: 0, y: 0, width: 820, height: 460))
@@ -148,6 +150,9 @@ class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTab
             return
         }
         selectedAgent = agent
+        previewTextureCacheLock.lock()
+        previewTextureCache.removeAll(keepingCapacity: true)
+        previewTextureCacheLock.unlock()
         detailLabel.stringValue = "\(agent.resourceName.capitalized): \(agent.animations.count) animations"
         showPreviewInitialFrame(for: agent)
         animationTableView.reloadData()
@@ -166,11 +171,11 @@ class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTab
         previewView.agentSprite.removeAllActions()
         previewView.frame.size = CGSize(width: agent.character.width, height: agent.character.height)
         previewView.agentSprite.size = previewView.frame.size
-        guard let image = try? agent.textureAtIndex(index: 0) else {
+        guard let texture = previewTexture(at: 0, for: agent) else {
             previewView.agentSprite.texture = nil
             return
         }
-        previewView.agentSprite.texture = SKTexture(cgImage: image)
+        previewView.agentSprite.texture = texture
     }
 
     private func preview(animation: AgentAnimation, for agent: Agent) {
@@ -179,9 +184,7 @@ class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTab
 
         DispatchQueue.global(qos: .userInitiated).async {
             let actions = animation.frames.compactMap { frame -> SKAction? in
-                guard let image = agent.imageForFrame(frame) else { return nil }
-                let texture = SKTexture(cgImage: image)
-                texture.filteringMode = .nearest
+                guard let texture = self.previewTexture(for: frame, in: agent) else { return nil }
                 return SKAction.animate(with: [texture], timePerFrame: frame.durationInSeconds)
             }
 
@@ -196,6 +199,34 @@ class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTab
                 }
             }
         }
+    }
+
+    private func previewTexture(for frame: AgentFrame, in agent: Agent) -> SKTexture? {
+        if frame.images.count == 1, let imageNumber = frame.images.first?.imageNumber {
+            return previewTexture(at: imageNumber, for: agent)
+        }
+
+        guard let image = agent.imageForFrame(frame) else { return previewTexture(at: 0, for: agent) }
+        let texture = SKTexture(cgImage: image)
+        texture.filteringMode = .nearest
+        return texture
+    }
+
+    private func previewTexture(at index: Int, for agent: Agent) -> SKTexture? {
+        previewTextureCacheLock.lock()
+        if let texture = previewTextureCache[index] {
+            previewTextureCacheLock.unlock()
+            return texture
+        }
+        previewTextureCacheLock.unlock()
+
+        guard let image = try? agent.textureAtIndex(index: index) else { return nil }
+        let texture = SKTexture(cgImage: image)
+        texture.filteringMode = .nearest
+        previewTextureCacheLock.lock()
+        previewTextureCache[index] = texture
+        previewTextureCacheLock.unlock()
+        return texture
     }
 }
 

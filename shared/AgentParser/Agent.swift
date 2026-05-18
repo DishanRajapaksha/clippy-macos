@@ -24,6 +24,7 @@ struct Agent {
     var resourceName: String
     var resourceNameWithSuffix: String
     var spriteMap: CGImage
+    var spriteImages: [CGImage] = []
     let soundsURL: URL
     var soundURLsByIndex: [Int: URL] = [:]
     
@@ -43,6 +44,7 @@ struct Agent {
             self.animations = parsedAgent.animations
             self.states = parsedAgent.states
             self.spriteMap = parsedAgent.spriteMap
+            self.spriteImages = parsedAgent.spriteImages
             return
         }
 
@@ -120,7 +122,7 @@ struct Agent {
     }
     
     func findAnimation(_ name: String) -> AgentAnimation? {
-        return animations.first(where: { $0.name == name })
+        return animations.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })
     }
 }
 
@@ -144,6 +146,10 @@ extension Agent {
     }
     
     func textureAtIndex(index: Int) throws -> CGImage {
+        if spriteImages.indices.contains(index) {
+            return spriteImages[index]
+        }
+
         guard columns > 0 else { throw AgentError.invalidSpriteMap }
         let x = index % columns
         let y = index / columns
@@ -151,6 +157,10 @@ extension Agent {
     }
     
     func imageForFrame(_ frame: AgentFrame) -> CGImage? {
+        if frame.images.count == 1, let imageNumber = frame.images.first?.imageNumber {
+            return try? textureAtIndex(index: imageNumber)
+        }
+
         let cgImages = frame.images.reversed().compactMap { try? textureAtIndex(index: $0.imageNumber) }
         guard !cgImages.isEmpty else { return try? textureAtIndex(index: 0) }
         if let mergedImage = CGImage.mergeImages(cgImages) {

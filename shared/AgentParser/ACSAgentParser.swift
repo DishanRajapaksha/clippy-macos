@@ -40,13 +40,13 @@ struct ParsedACSAgent {
     let animations: [AgentAnimation]
     let states: [AgentState]
     let spriteMap: CGImage
+    let spriteImages: [CGImage]
     let soundsURL: URL
     let soundURLsByIndex: [Int: URL]
 }
 
 struct ACSAgentParser {
     private static let signature: UInt32 = 0xABCDABC3
-    private static let spriteMapMaxWidth = 4096
 
     static func parse(url: URL, resourceName: String) throws -> ParsedACSAgent {
         let data = try Data(contentsOf: url)
@@ -78,11 +78,15 @@ struct ACSAgentParser {
             characterHeight: characterInfo.character.height
         )
 
-        let spriteMap = try buildSpriteMap(
-            images: spriteFrames.images,
-            frameWidth: characterInfo.character.width,
-            frameHeight: characterInfo.character.height
-        )
+        let spriteMap: CGImage
+        if let firstImage = spriteFrames.images.first {
+            spriteMap = firstImage
+        } else {
+            spriteMap = try makeEmptyImage(
+                width: characterInfo.character.width,
+                height: characterInfo.character.height
+            )
+        }
 
         let animations = sourceAnimations.map { sourceAnimation in
             AgentAnimation(
@@ -108,6 +112,7 @@ struct ACSAgentParser {
             animations: animations,
             states: characterInfo.states,
             spriteMap: spriteMap,
+            spriteImages: spriteFrames.images,
             soundsURL: audioURLs.directory,
             soundURLsByIndex: audioURLs.urlsByIndex
         )
@@ -129,7 +134,7 @@ private extension ACSAgentParser {
         let cgImage: CGImage
     }
 
-    struct SourceFrameImage {
+    struct SourceFrameImage: Hashable {
         let imageIndex: Int
         let x: Int
         let y: Int
@@ -276,22 +281,29 @@ private extension ACSAgentParser {
 
             let stride = (width + 3) & ~3
             let expectedSize = stride * height
-            let bitmapData = isCompressed
-                ? try ACSDecompressor.decompress(imageBlock, expectedSize: expectedSize)
-                : imageBlock
+            let image: CGImage
+            do {
+                let bitmapData = isCompressed
+                    ? try ACSDecompressor.decompress(imageBlock, expectedSize: expectedSize)
+                    : imageBlock
 
-            guard bitmapData.count >= expectedSize else {
-                throw ACSAgentParserError.invalidImageData
+                guard bitmapData.count >= expectedSize else {
+                    throw ACSAgentParserError.invalidImageData
+                }
+
+                image = try makeImage(
+                    width: width,
+                    height: height,
+                    stride: stride,
+                    indexedBitmap: bitmapData,
+                    palette: palette,
+                    transparentIndex: transparentIndex
+                )
+            } catch {
+                // Some ACS files in the wild contain a few corrupt compressed bitmaps.
+                // Keep the character loadable and leave only those source images transparent.
+                image = try makeEmptyImage(width: width, height: height)
             }
-
-            let image = try makeImage(
-                width: width,
-                height: height,
-                stride: stride,
-                indexedBitmap: bitmapData,
-                palette: palette,
-                transparentIndex: transparentIndex
-            )
             return SourceImage(width: width, height: height, cgImage: image)
         }
     }
@@ -380,14 +392,15 @@ private extension ACSAgentParser {
         let cacheID = "\(resourceName)-\(fileSize)-\(Int(modifiedAt))".sanitizedFileComponent()
         let directory = Agent.acsAudioCacheURL().appendingPathComponent(cacheID, isDirectory: true)
 
-        try? FileManager.default.removeItem(at: directory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
 
         var urlsByIndex: [Int: URL] = [:]
         for (index, entry) in entries.enumerated() where entry.locator.size > 0 {
-            let audioData = try data.subdata(locator: entry.locator)
             let url = directory.appendingPathComponent("\(resourceName)_\(index).wav")
-            try audioData.write(to: url, options: .atomic)
+            if !FileManager.default.fileExists(atPath: url.path) {
+                let audioData = try data.subdata(locator: entry.locator)
+                try audioData.write(to: url, options: .atomic)
+            }
             urlsByIndex[index] = url
         }
         return AudioCache(directory: directory, urlsByIndex: urlsByIndex)
@@ -401,16 +414,24 @@ private extension ACSAgentParser {
     ) throws -> SpriteFrames {
         var images: [CGImage] = []
         var indexesByFrameID: [Int: Int] = [:]
+        var indexesByImageStack: [[SourceFrameImage]: Int] = [:]
 
         for animation in animations {
             for frame in animation.frames {
+                if let existingIndex = indexesByImageStack[frame.images] {
+                    indexesByFrameID[frame.id] = existingIndex
+                    continue
+                }
+
+                let spriteIndex = images.count
                 let image = try composeFrame(
                     frame,
                     sourceImages: sourceImages,
                     characterWidth: characterWidth,
                     characterHeight: characterHeight
                 )
-                indexesByFrameID[frame.id] = images.count
+                indexesByImageStack[frame.images] = spriteIndex
+                indexesByFrameID[frame.id] = spriteIndex
                 images.append(image)
             }
         }
@@ -452,44 +473,6 @@ private extension ACSAgentParser {
                 height: sourceImage.height
             )
             context.draw(sourceImage.cgImage, in: drawRect)
-        }
-
-        guard let image = context.makeImage() else {
-            throw ACSAgentParserError.imageCreationFailed
-        }
-        return image
-    }
-
-    static func buildSpriteMap(images: [CGImage], frameWidth: Int, frameHeight: Int) throws -> CGImage {
-        let columns = max(1, min(images.count, spriteMapMaxWidth / max(frameWidth, 1)))
-        let rows = max(1, Int(ceil(Double(images.count) / Double(columns))))
-        let width = columns * frameWidth
-        let height = rows * frameHeight
-        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
-
-        guard let context = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: bitmapInfo
-        ) else {
-            throw ACSAgentParserError.imageCreationFailed
-        }
-
-        context.clear(CGRect(x: 0, y: 0, width: width, height: height))
-        for (index, image) in images.enumerated() {
-            let column = index % columns
-            let row = index / columns
-            let drawRect = CGRect(
-                x: column * frameWidth,
-                y: height - ((row + 1) * frameHeight),
-                width: frameWidth,
-                height: frameHeight
-            )
-            context.draw(image, in: drawRect)
         }
 
         guard let image = context.makeImage() else {

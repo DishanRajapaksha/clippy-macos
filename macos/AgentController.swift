@@ -25,6 +25,8 @@ class AgentController {
     
     var agent: Agent?
     var agentView: AgentView?
+    private var textureCache: [Int: SKTexture] = [:]
+    private let textureCacheLock = NSLock()
     
     var delegate: AgentControllerDelegate?
     var isHidden = true
@@ -40,6 +42,9 @@ class AgentController {
     func load(name: String) throws {
         guard let agent = Agent(resourceName: name) else { return }
         delegate?.willLoadAgent(agent: agent)
+        textureCacheLock.lock()
+        textureCache.removeAll(keepingCapacity: true)
+        textureCacheLock.unlock()
         self.agent = agent
         showInitialFrame()
         restartAutoAnimateTimer()
@@ -59,8 +64,8 @@ class AgentController {
     }
     
     func showInitialFrame() {
-        guard let agent = agent, let image = try? agent.textureAtIndex(index: 0) else { return }
-        self.agentView?.agentSprite.texture = SKTexture(cgImage: image)
+        guard let agent = agent, let texture = texture(at: 0, for: agent) else { return }
+        self.agentView?.agentSprite.texture = texture
     }
     
     func play(animation: AgentAnimation, withSoundEnabled soundEnabled: Bool = true, interruptCurrent: Bool = true, completion: (() -> Void)? = nil) {
@@ -88,13 +93,11 @@ class AgentController {
                     actions.append(audioAction)
                 }
                 
-                guard let image = agent.imageForFrame(frame) else {
+                guard let texture = self.texture(for: frame, in: agent) else {
                     safetyCounter += 1
                     frameIndex = self.nextFrameIndex(after: frameIndex, in: animation)
                     continue
                 }
-                let texture = SKTexture(cgImage: image)
-                texture.filteringMode = .nearest
                 let action = SKAction.animate(with: [texture], timePerFrame: frame.durationInSeconds)
                 actions.append(action)
 
@@ -122,10 +125,15 @@ class AgentController {
     private func nextFrameIndex(after currentIndex: Int, in animation: AgentAnimation) -> Int {
         let frame = animation.frames[currentIndex]
 
-        // Use branching table when the frame explicitly exits via a branch.
-        if let exitBranch = frame.exitBranch, !frame.branchings.isEmpty {
-            if let branch = selectBranch(from: frame.branchings, matching: exitBranch) {
+        if !frame.branchings.isEmpty {
+            if let branch = selectBranch(from: frame.branchings),
+               animation.frames.indices.contains(branch.branchTo) {
                 return branch.branchTo
+            }
+
+            if let exitBranch = frame.exitBranch,
+               animation.frames.indices.contains(exitBranch) {
+                return exitBranch
             }
         }
 
@@ -134,24 +142,50 @@ class AgentController {
         return next < animation.frames.count ? next : -1
     }
 
-    private func selectBranch(from branchings: [AgentBranching], matching exitBranch: Int) -> AgentBranching? {
-        // Branch ids in files are often 1-based; support both 0-based and 1-based.
-        let filtered = branchings.filter { $0.branchTo == exitBranch || $0.branchTo == (exitBranch - 1) }
-        let candidates = filtered.isEmpty ? branchings : filtered
-        guard !candidates.isEmpty else { return nil }
+    private func texture(for frame: AgentFrame, in agent: Agent) -> SKTexture? {
+        if frame.images.count == 1, let imageNumber = frame.images.first?.imageNumber {
+            return texture(at: imageNumber, for: agent)
+        }
 
-        let total = max(candidates.reduce(0) { $0 + max(0, $1.probability) }, 0)
-        guard total > 0 else { return candidates.randomElement() }
+        guard let image = agent.imageForFrame(frame) else { return texture(at: 0, for: agent) }
+        let texture = SKTexture(cgImage: image)
+        texture.filteringMode = .nearest
+        return texture
+    }
 
-        let roll = Int.random(in: 0..<total)
+    private func texture(at index: Int, for agent: Agent) -> SKTexture? {
+        textureCacheLock.lock()
+        if let texture = textureCache[index] {
+            textureCacheLock.unlock()
+            return texture
+        }
+        textureCacheLock.unlock()
+
+        guard let image = try? agent.textureAtIndex(index: index) else { return nil }
+        let texture = SKTexture(cgImage: image)
+        texture.filteringMode = .nearest
+        textureCacheLock.lock()
+        textureCache[index] = texture
+        textureCacheLock.unlock()
+        return texture
+    }
+
+    private func selectBranch(from branchings: [AgentBranching]) -> AgentBranching? {
+        guard !branchings.isEmpty else { return nil }
+
+        let total = branchings.reduce(0) { $0 + max(0, $1.probability) }
+        guard total > 0 else { return nil }
+
+        let rollLimit = max(total, 100)
+        let roll = Int.random(in: 0..<rollLimit)
         var running = 0
-        for branch in candidates {
+        for branch in branchings {
             running += max(0, branch.probability)
             if roll < running {
                 return branch
             }
         }
-        return candidates.last
+        return nil
     }
     
     func animate() {
@@ -169,10 +203,11 @@ class AgentController {
         guard let agent = agent else { return [] }
         let idleAnimationNames = Set(
             agent.states
-                .filter { $0.name.hasPrefix("Idling") }
+                .filter { $0.name.range(of: "Idling", options: [.caseInsensitive, .anchored]) != nil }
                 .flatMap { $0.animationNames }
+                .map { $0.lowercased() }
         )
-        let stateAnimations = agent.animations.filter { idleAnimationNames.contains($0.name) }
+        let stateAnimations = agent.animations.filter { idleAnimationNames.contains($0.name.lowercased()) }
         if !stateAnimations.isEmpty {
             return stateAnimations
         }
