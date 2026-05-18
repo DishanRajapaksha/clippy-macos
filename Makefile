@@ -4,13 +4,18 @@ CONFIGURATION := Debug
 DESTINATION := platform=macOS,arch=arm64
 DERIVED_DATA := $(HOME)/Library/Developer/Xcode/DerivedData/clippy-make
 APP := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/Clippy.app
+PACKAGE_APP := $(DERIVED_DATA)/Build/Products/Release/Clippy.app
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo local)
+DIST_DIR := dist
+ZIP := $(DIST_DIR)/Clippy-macOS-$(VERSION).zip
 
-.PHONY: help build run clean open project list convert-agent
+.PHONY: help build run package clean open project list convert-agent
 
 help:
 	@echo "Targets:"
 	@echo "  make build   - Build the app"
 	@echo "  make run     - Build and launch the app"
+	@echo "  make package - Build a Release zip in dist/"
 	@echo "  make clean   - Clean build artifacts"
 	@echo "  make open    - Open the Xcode project"
 	@echo "  make project - Print project settings"
@@ -33,6 +38,14 @@ run: build
 	sleep 0.4
 	open "$(APP)" || (sleep 0.6 && open "$(APP)")
 
+package:
+	$(MAKE) build CONFIGURATION=Release
+	rm -rf "$(DIST_DIR)"
+	mkdir -p "$(DIST_DIR)"
+	ditto -c -k --norsrc --keepParent "$(PACKAGE_APP)" "$(ZIP)"
+	shasum -a 256 "$(ZIP)" > "$(ZIP).sha256"
+	@echo "Packaged $(ZIP)"
+
 clean:
 	xcodebuild \
 		-project "$(PROJECT)" \
@@ -50,6 +63,7 @@ project:
 	@echo "DESTINATION=$(DESTINATION)"
 	@echo "DERIVED_DATA=$(DERIVED_DATA)"
 	@echo "APP=$(APP)"
+	@echo "PACKAGE_APP=$(PACKAGE_APP)"
 
 list:
 	xcodebuild -project "$(PROJECT)" -list

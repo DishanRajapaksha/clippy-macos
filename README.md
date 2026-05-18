@@ -29,8 +29,22 @@ Useful targets:
 - `make help`
 - `make build`
 - `make run`
+- `make package` (creates a Release zip under `dist/`)
 - `make clean`
 - `make open` (opens `clippy.xcodeproj` in Xcode)
+
+## Publish Binaries
+
+GitHub Actions publishes unsigned macOS binaries from `.github/workflows/publish-binaries.yml`.
+
+- Run `Publish Binaries` manually to produce a downloadable workflow artifact.
+- Push a version tag such as `v0.1.0` to create a GitHub release with `Clippy.app` zipped under `dist/`.
+
+Local package build:
+
+```sh
+make package
+```
 
 ## Add Other Agents
 
