@@ -14,12 +14,19 @@ enum AgentError: Error {
     case invalidSpriteMap
 }
 
+struct AgentListing {
+    let name: String
+    let url: URL
+    let isSupported: Bool
+    let reason: String?
+}
+
 struct Agent {
     var character: AgentCharacter
     var balloon: AgentBalloon
     var animations: [AgentAnimation]
     var states: [AgentState]
-    
+
     var agentURL: URL
     var resourceName: String
     var resourceNameWithSuffix: String
@@ -27,7 +34,7 @@ struct Agent {
     var spriteImages: [CGImage] = []
     let soundsURL: URL
     var soundURLsByIndex: [Int: URL] = [:]
-    
+
     init?(agentURL: URL) {
         self.agentURL = agentURL
         self.resourceNameWithSuffix = agentURL.lastPathComponent
@@ -249,7 +256,17 @@ extension Agent {
     }
 
     static func agentNames() -> [String] {
-        var agentNames = Set<String>()
+        let names = agentListings()
+            .filter(\.isSupported)
+            .map(\.name)
+        return Array(Set(names)).sorted()
+    }
+
+    static func randomAgentName() -> String? {
+        agentNames().randomElement()
+    }
+
+    static func agentListings() -> [AgentListing] {
         let fileManager = FileManager.default
         guard let items = try? fileManager.contentsOfDirectory(at: agentsURL(),
                                                                includingPropertiesForKeys: [.isDirectoryKey],
@@ -257,30 +274,63 @@ extension Agent {
             return []
         }
 
-        for item in items {
-            if item.hasDirectoryPath && item.lastPathComponent.hasSuffix(".agent") {
-                agentNames.insert(item.deletingPathExtension().lastPathComponent)
-            } else if !item.hasDirectoryPath && item.pathExtension.lowercased() == "acs" && isSupportedACSFile(item) {
-                agentNames.insert(item.deletingPathExtension().lastPathComponent)
+        return items.compactMap { item -> AgentListing? in
+            let isDirectory = (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? item.hasDirectoryPath
+            let ext = item.pathExtension.lowercased()
+            let name = item.deletingPathExtension().lastPathComponent
+
+            if isDirectory && ext == "agent" {
+                return AgentListing(name: name, url: item, isSupported: true, reason: nil)
             }
+
+            if !isDirectory && ext == "acs" {
+                let reason = acsUnsupportedReason(item)
+                return AgentListing(name: name, url: item, isSupported: reason == nil, reason: reason)
+            }
+
+            return nil
         }
-        return agentNames.sorted()
+        .sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
     }
-    
-    static func randomAgentName() -> String? {
-        agentNames().randomElement()
+
+    static func agentStatus(for url: URL) -> (isSupported: Bool, reason: String?) {
+        let ext = url.pathExtension.lowercased()
+        if ext == "acs" {
+            let reason = acsUnsupportedReason(url)
+            return (reason == nil, reason)
+        }
+        if ext == "agent" || url.hasDirectoryPath {
+            let reason = Agent(agentURL: url) == nil ? "could not read .agent resources" : nil
+            return (reason == nil, reason)
+        }
+        return (false, "unsupported file type")
     }
 
     private static func isSupportedACSFile(_ url: URL) -> Bool {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        acsUnsupportedReason(url) == nil
+    }
+
+    private static func acsUnsupportedReason(_ url: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return "could not read ACS file" }
         defer {
             try? handle.close()
         }
         let signature = handle.readData(ofLength: 4)
-        guard signature.count == 4 else { return false }
-        return signature[0] == 0xC3 &&
+        guard signature.count == 4 else { return "file is too small to be an ACS agent" }
+        if signature[0] == 0xC3 &&
             signature[1] == 0xAB &&
             signature[2] == 0xCD &&
-            signature[3] == 0xAB
+            signature[3] == 0xAB {
+            return nil
+        }
+        if signature[0] == 0xD0 &&
+            signature[1] == 0xCF &&
+            signature[2] == 0x11 &&
+            signature[3] == 0xE0 {
+            return "OLE-container ACS files are not supported yet"
+        }
+        return "unsupported ACS signature"
     }
 }

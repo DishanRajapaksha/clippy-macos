@@ -8,236 +8,9 @@
 
 import Cocoa
 import ServiceManagement
-import SpriteKit
 import UniformTypeIdentifiers
 
-class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
-    struct PreviewRow {
-        let name: String
-        let size: String
-        let animations: String
-    }
-
-    private var rows: [PreviewRow] = []
-    private var selectedAgent: Agent?
-    private let tableView = NSTableView()
-    private let animationTableView = NSTableView()
-    private let detailLabel = NSTextField(labelWithString: "Select an agent to inspect animations.")
-    private let previewView = AgentView(frame: NSRect(x: 0, y: 0, width: 140, height: 140))
-    private var previewPlaybackID = UUID()
-    private var previewTextureCache: [Int: SKTexture] = [:]
-    private let previewTextureCacheLock = NSLock()
-
-    override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 820, height: 460))
-        setupTable()
-        loadRows()
-    }
-
-    private func setupTable() {
-        let splitView = NSSplitView(frame: view.bounds)
-        splitView.autoresizingMask = [.width, .height]
-        splitView.dividerStyle = .thin
-        splitView.isVertical = true
-
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 430, height: view.bounds.height))
-        scroll.autoresizingMask = [.width, .height]
-        scroll.hasVerticalScroller = true
-
-        let nameColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
-        nameColumn.title = "Name"
-        nameColumn.width = 220
-
-        let sizeColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("size"))
-        sizeColumn.title = "Size"
-        sizeColumn.width = 120
-
-        let animColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("animations"))
-        animColumn.title = "Animations"
-        animColumn.width = 140
-
-        tableView.addTableColumn(nameColumn)
-        tableView.addTableColumn(sizeColumn)
-        tableView.addTableColumn(animColumn)
-        tableView.delegate = self
-        tableView.dataSource = self
-        tableView.usesAlternatingRowBackgroundColors = true
-
-        scroll.documentView = tableView
-        splitView.addArrangedSubview(scroll)
-
-        let detailView = NSView(frame: NSRect(x: 0, y: 0, width: 390, height: view.bounds.height))
-        detailView.autoresizingMask = [.width, .height]
-        detailLabel.frame = NSRect(x: 12, y: detailView.bounds.height - 34, width: 366, height: 18)
-        detailLabel.autoresizingMask = [.width, .minYMargin]
-        detailView.addSubview(detailLabel)
-
-        previewView.frame = NSRect(x: 12, y: detailView.bounds.height - 186, width: 140, height: 140)
-        previewView.autoresizingMask = [.maxXMargin, .minYMargin]
-        detailView.addSubview(previewView)
-
-        let animationScroll = NSScrollView(frame: NSRect(x: 12, y: 12, width: 366, height: detailView.bounds.height - 222))
-        animationScroll.autoresizingMask = [.width, .height]
-        animationScroll.hasVerticalScroller = true
-
-        let animationColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("animation"))
-        animationColumn.title = "Animation"
-        animationColumn.width = 340
-        animationTableView.addTableColumn(animationColumn)
-        animationTableView.delegate = self
-        animationTableView.dataSource = self
-        animationTableView.usesAlternatingRowBackgroundColors = true
-        animationTableView.target = self
-        animationTableView.doubleAction = #selector(playSelectedAnimation(sender:))
-        animationScroll.documentView = animationTableView
-        detailView.addSubview(animationScroll)
-
-        splitView.addArrangedSubview(detailView)
-        view.addSubview(splitView)
-    }
-
-    private func loadRows() {
-        rows = Agent.agentNames().compactMap { name in
-            guard let agent = Agent(resourceName: name) else { return nil }
-            let size = "\(agent.character.width)x\(agent.character.height)"
-            return PreviewRow(name: name, size: size, animations: "\(agent.animations.count)")
-        }
-        tableView.reloadData()
-    }
-
-    func numberOfRows(in tableView: NSTableView) -> Int {
-        if tableView == animationTableView {
-            return selectedAgent?.animations.count ?? 0
-        }
-        return rows.count
-    }
-
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        if tableView == animationTableView {
-            guard let animation = selectedAgent?.animations[safe: row] else { return nil }
-            let cell = NSTextField(labelWithString: animation.name)
-            cell.identifier = tableColumn?.identifier
-            return cell
-        }
-
-        guard row < rows.count else { return nil }
-        let item = rows[row]
-        let identifier = tableColumn?.identifier ?? NSUserInterfaceItemIdentifier("col")
-        let cell = NSTextField(labelWithString: "")
-        cell.identifier = identifier
-        switch identifier.rawValue {
-        case "name": cell.stringValue = item.name
-        case "size": cell.stringValue = item.size
-        case "animations": cell.stringValue = item.animations
-        default: cell.stringValue = ""
-        }
-        return cell
-    }
-
-    func tableViewSelectionDidChange(_ notification: Notification) {
-        if notification.object as? NSTableView == animationTableView {
-            playSelectedAnimation(sender: animationTableView)
-            return
-        }
-
-        guard notification.object as? NSTableView == tableView else { return }
-        let row = tableView.selectedRow
-        guard row >= 0, row < rows.count, let agent = Agent(resourceName: rows[row].name) else {
-            selectedAgent = nil
-            detailLabel.stringValue = "Select an agent to inspect animations."
-            animationTableView.reloadData()
-            previewView.agentSprite.texture = nil
-            return
-        }
-        selectedAgent = agent
-        previewTextureCacheLock.lock()
-        previewTextureCache.removeAll(keepingCapacity: true)
-        previewTextureCacheLock.unlock()
-        detailLabel.stringValue = "\(agent.resourceName.capitalized): \(agent.animations.count) animations"
-        showPreviewInitialFrame(for: agent)
-        animationTableView.reloadData()
-        animationTableView.deselectAll(self)
-    }
-
-    @objc private func playSelectedAnimation(sender: AnyObject) {
-        guard let agent = selectedAgent else { return }
-        let row = animationTableView.selectedRow
-        guard row >= 0, let animation = agent.animations[safe: row] else { return }
-        preview(animation: animation, for: agent)
-    }
-
-    private func showPreviewInitialFrame(for agent: Agent) {
-        previewPlaybackID = UUID()
-        previewView.agentSprite.removeAllActions()
-        previewView.frame.size = CGSize(width: agent.character.width, height: agent.character.height)
-        previewView.agentSprite.size = previewView.frame.size
-        guard let texture = previewTexture(at: 0, for: agent) else {
-            previewView.agentSprite.texture = nil
-            return
-        }
-        previewView.agentSprite.texture = texture
-    }
-
-    private func preview(animation: AgentAnimation, for agent: Agent) {
-        let playbackID = UUID()
-        previewPlaybackID = playbackID
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let actions = animation.frames.compactMap { frame -> SKAction? in
-                guard let texture = self.previewTexture(for: frame, in: agent) else { return nil }
-                return SKAction.animate(with: [texture], timePerFrame: frame.durationInSeconds)
-            }
-
-            DispatchQueue.main.async {
-                guard self.previewPlaybackID == playbackID, !actions.isEmpty else { return }
-                self.previewView.frame.size = CGSize(width: agent.character.width, height: agent.character.height)
-                self.previewView.agentSprite.size = self.previewView.frame.size
-                self.previewView.agentSprite.removeAllActions()
-                self.previewView.agentSprite.run(SKAction.sequence(actions)) {
-                    guard self.previewPlaybackID == playbackID else { return }
-                    self.showPreviewInitialFrame(for: agent)
-                }
-            }
-        }
-    }
-
-    private func previewTexture(for frame: AgentFrame, in agent: Agent) -> SKTexture? {
-        if frame.images.count == 1, let imageNumber = frame.images.first?.imageNumber {
-            return previewTexture(at: imageNumber, for: agent)
-        }
-
-        guard let image = agent.imageForFrame(frame) else { return previewTexture(at: 0, for: agent) }
-        let texture = SKTexture(cgImage: image)
-        texture.filteringMode = .nearest
-        return texture
-    }
-
-    private func previewTexture(at index: Int, for agent: Agent) -> SKTexture? {
-        previewTextureCacheLock.lock()
-        if let texture = previewTextureCache[index] {
-            previewTextureCacheLock.unlock()
-            return texture
-        }
-        previewTextureCacheLock.unlock()
-
-        guard let image = try? agent.textureAtIndex(index: index) else { return nil }
-        let texture = SKTexture(cgImage: image)
-        texture.filteringMode = .nearest
-        previewTextureCacheLock.lock()
-        previewTextureCache[index] = texture
-        previewTextureCacheLock.unlock()
-        return texture
-    }
-}
-
-private extension Array {
-    subscript(safe index: Int) -> Element? {
-        guard indices.contains(index) else { return nil }
-        return self[index]
-    }
-}
-
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, AgentPreviewViewControllerDelegate {
     let applicationName = "Clippy"
     static let lastUsedAgentDefaultsKey = "LastUsedAgent"
     static let speechBubblesEnabledDefaultsKey = "SpeechBubblesEnabled"
@@ -255,6 +28,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var muteMenuItem: NSMenuItem?
     var speechBubblesMenuItem: NSMenuItem?
     var previewWindowController: NSWindowController?
+    private let agentImporter = AgentImporter()
     static var agentController: AgentController?
     var lastUsedAgent: String? {
         get {
@@ -525,33 +299,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.prompt = "Import"
 
         guard panel.runModal() == .OK else { return }
-        var imported: [String] = []
-        var failures: [String] = []
-
-        for url in panel.urls {
-            do {
-                let name = try importAgent(from: url)
-                imported.append(name)
-            } catch {
-                failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
-            }
-        }
+        let outcome = agentImporter.importAgents(from: panel.urls)
         reloadAction(sender: self)
-        presentImportResult(imported: imported, failures: failures)
+        presentImportResult(imported: outcome.imported, failures: outcome.failures)
     }
 
     @objc func showAgentPreviewsAction(sender: AnyObject) {
         let vc = AgentPreviewViewController()
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 360),
+        vc.delegate = self
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 480),
                               styleMask: [.titled, .closable, .resizable],
                               backing: .buffered,
                               defer: false)
         window.title = "Agent Previews"
         window.contentViewController = vc
+        window.level = .floating
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.isReleasedWhenClosed = false
+        window.center()
         let controller = NSWindowController(window: window)
         previewWindowController = controller
         controller.showWindow(self)
+        window.makeKeyAndOrderFront(self)
+        window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func agentPreviewViewController(_ controller: AgentPreviewViewController, didSelectAgent name: String) {
+        try? AppDelegate.agentController?.load(name: name)
+        if let animation = AppDelegate.agentController?.agent?.findAnimation("Show") {
+            AppDelegate.agentController?.play(animation: animation)
+        }
+        lastUsedAgent = name
+        window?.makeKeyAndOrderFront(self)
+        refreshDynamicMenus()
+    }
+
+    func agentPreviewViewControllerDidChangeAgents(_ controller: AgentPreviewViewController) {
+        refreshDynamicMenus()
     }
     
     @objc func hideAction(sender: AnyObject) {
@@ -659,47 +444,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         clamped.origin.x = max(visible.minX, min(clamped.origin.x, visible.maxX - clamped.width))
         clamped.origin.y = max(visible.minY, min(clamped.origin.y, visible.maxY - clamped.height))
         return clamped
-    }
-
-    private func importAgent(from url: URL) throws -> String {
-        let fm = FileManager.default
-        let agentsURL = Agent.agentsURL()
-        let destination = agentsURL.appendingPathComponent(url.lastPathComponent)
-
-        try? fm.removeItem(at: destination)
-        try fm.copyItem(at: url, to: destination)
-
-        let pathExtension = url.pathExtension.lowercased()
-        if pathExtension == "zip" {
-            let process = try Process.run(URL(fileURLWithPath: "/usr/bin/unzip"),
-                                          arguments: ["-o", destination.path, "-d", agentsURL.path])
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else {
-                throw NSError(domain: "ClippyImport", code: Int(process.terminationStatus), userInfo: [
-                    NSLocalizedDescriptionKey: "unzip failed with status \(process.terminationStatus)"
-                ])
-            }
-        } else if !(pathExtension == "agent" || pathExtension == "acs" || url.hasDirectoryPath) {
-            throw NSError(domain: "ClippyImport", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "unsupported file type"
-            ])
-        }
-
-        let name = normalizedAgentName(from: url)
-        guard Agent(resourceName: name) != nil else {
-            throw NSError(domain: "ClippyImport", code: 2, userInfo: [
-                NSLocalizedDescriptionKey: "agent files were copied but could not be loaded"
-            ])
-        }
-        return name
-    }
-
-    private func normalizedAgentName(from url: URL) -> String {
-        var name = url.deletingPathExtension().lastPathComponent
-        if name.hasSuffix(".agent") {
-            name = String(name.dropLast(".agent".count))
-        }
-        return name
     }
 
     private func presentImportResult(imported: [String], failures: [String]) {

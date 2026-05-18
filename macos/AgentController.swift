@@ -190,7 +190,7 @@ class AgentController {
     
     func animate() {
         guard let agent = agent else { return }
-        let animation = agent.animations.randomElement()!
+        guard let animation = agent.animations.randomElement() else { return }
         play(animation: animation)
     }
 
