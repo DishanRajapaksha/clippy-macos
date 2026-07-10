@@ -304,24 +304,46 @@ class AgentPreviewViewController: NSViewController, NSTableViewDataSource, NSTab
         let row = filteredRows[rowIndex]
 
         let alert = NSAlert()
-        alert.messageText = "Delete \(row.name)?"
-        alert.informativeText = "This removes the agent from Clippy's Agents folder."
-        alert.addButton(withTitle: "Delete")
+        alert.messageText = "Move \(row.name) to the Trash?"
+        alert.informativeText = "The agent can be restored from the Trash until it is emptied."
+        alert.addButton(withTitle: "Move to Trash")
         alert.addButton(withTitle: "Cancel")
         alert.alertStyle = .warning
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        do {
-            try FileManager.default.removeItem(at: row.url)
-            agentCache[row.url] = nil
-            loadRows()
-            delegate?.agentPreviewViewControllerDidChangeAgents(self)
-        } catch {
-            let errorAlert = NSAlert()
-            errorAlert.messageText = "Delete Failed"
-            errorAlert.informativeText = error.localizedDescription
-            errorAlert.alertStyle = .warning
-            errorAlert.runModal()
+        let currentURL = AppDelegate.agentController?.agent?.agentURL.standardizedFileURL
+        let deletingCurrentAgent = currentURL == row.url.standardizedFileURL
+        deleteButton.isEnabled = false
+
+        NSWorkspace.shared.recycle([row.url]) { [weak self] _, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.deleteButton.isEnabled = true
+                if let error = error {
+                    let errorAlert = NSAlert()
+                    errorAlert.messageText = "Move to Trash Failed"
+                    errorAlert.informativeText = error.localizedDescription
+                    errorAlert.alertStyle = .warning
+                    errorAlert.runModal()
+                    return
+                }
+
+                self.agentCache[row.url] = nil
+                self.loadRows()
+                self.delegate?.agentPreviewViewControllerDidChangeAgents(self)
+
+                guard deletingCurrentAgent, let controller = AppDelegate.agentController else { return }
+                if let replacement = Agent.agentNames().first(where: {
+                    $0.caseInsensitiveCompare(row.name) != .orderedSame
+                }) {
+                    try? controller.load(name: replacement)
+                    controller.show()
+                } else {
+                    controller.cancelPlayback()
+                    controller.agent = nil
+                    controller.hide()
+                }
+            }
         }
     }
 
