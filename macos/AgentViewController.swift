@@ -345,6 +345,10 @@ extension AgentViewController {
 
     private func relevantScreen(for frame: CGRect, window: NSWindow) -> NSScreen? {
         let screens = NSScreen.screens
+        if hasDragged,
+           let pointerScreen = screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) {
+            return pointerScreen
+        }
         if let bestMatch = screens.max(by: {
             intersectionArea(of: $0.frame, with: frame) < intersectionArea(of: $1.frame, with: frame)
         }), intersectionArea(of: bestMatch.frame, with: frame) > 0 {
