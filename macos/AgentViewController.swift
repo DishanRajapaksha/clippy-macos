@@ -14,8 +14,10 @@ class AgentViewController: NSViewController {
     private var speechPopover: NSPopover?
     private var speechDismissWorkItem: DispatchWorkItem?
     private var lastDragScreenPoint: CGPoint?
+    private var mouseDownScreenPoint: CGPoint?
     private var lastDragTimestamp: TimeInterval = 0
     private var dragVelocity: CGPoint = .zero
+    private var hasDragged = false
     private var inertiaTimer: Timer?
     private let quickPhrases = [
         "Need a hand?",
@@ -28,7 +30,7 @@ class AgentViewController: NSViewController {
         "Want to animate me?",
         "Let's get this done."
     ]
-    
+
     init() {
         agentView = AgentView()
         agentController = AgentController(agentView: agentView)
@@ -36,33 +38,32 @@ class AgentViewController: NSViewController {
         super.init(nibName: nil, bundle: nil)
         agentController.delegate = self
     }
-    
+
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
-    
+
     override func loadView() {
         let size = CGSize(width: 100, height: 200)
         view = NSView(frame: CGRect(origin: CGPoint.zero, size: size))
         view.wantsLayer = true
         view.layer?.backgroundColor = .clear
     }
-    
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.addSubview(agentView)
         setupConstraints()
         setupTrackingArea()
     }
-    
-    
+
     override func viewDidAppear() {
         super.viewDidAppear()
         view.window?.makeFirstResponder(self)
         if let appDelegate = NSApplication.shared.delegate as? AppDelegate {
             agentController.isMuted = appDelegate.isMuted()
         }
-        
+
         let lastUsedName = (NSApplication.shared.delegate as? AppDelegate)?.lastUsedAgent
         let name = lastUsedName ?? Agent.randomAgentName()
         if let name = name {
@@ -70,7 +71,7 @@ class AgentViewController: NSViewController {
             agentController.show()
         }
     }
-    
+
     func setupConstraints() {
         agentView.translatesAutoresizingMaskIntoConstraints = false
         agentView.topAnchor.constraint(equalTo: view.topAnchor).isActive = true
@@ -78,7 +79,7 @@ class AgentViewController: NSViewController {
         view.rightAnchor.constraint(equalTo: agentView.rightAnchor).isActive = true
         view.bottomAnchor.constraint(equalTo: agentView.bottomAnchor).isActive = true
     }
-    
+
     func setupTrackingArea() {
         let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .inVisibleRect, .activeAlways]
         let trackingArea = NSTrackingArea(rect: view.frame, options: options, owner: self, userInfo: nil)
@@ -90,11 +91,11 @@ extension AgentViewController {
     override func mouseEntered(with event: NSEvent) {
         self.view.superview?.window?.alphaValue = 1.0
     }
-    
+
     override func mouseExited(with event: NSEvent) {
         self.view.superview?.window?.alphaValue = 1.0
     }
-    
+
     @objc func animateAction() {
         agentController.animate()
     }
@@ -102,21 +103,21 @@ extension AgentViewController {
     @objc func idleAnimationAction() {
         agentController.animateIdle()
     }
-    
+
     @objc func chooseAssistantAction() {
         guard let name = Agent.randomAgentName() else { return }
         try? agentController.load(name: name)
         agentController.show()
     }
-    
+
     override var acceptsFirstResponder: Bool {
         return true
     }
-    
+
     override func becomeFirstResponder() -> Bool {
         return true
     }
-    
+
     override func keyDown(with event: NSEvent) {
         guard let agent = agentController.agent else {
             super.keyDown(with: event)
@@ -145,19 +146,19 @@ extension AgentViewController {
             super.keyDown(with: event)
         }
     }
-    
+
     override func mouseDown(with event: NSEvent) {
         stopInertia()
         if event.clickCount == 2 {
             agentController.animate()
-        } else if event.clickCount == 1 {
-            if (NSApplication.shared.delegate as? AppDelegate)?.isSpeechBubblesEnabled() ?? true {
-                speakRandomPhrase()
-            }
         }
-        lastDragScreenPoint = NSEvent.mouseLocation
+
+        let location = NSEvent.mouseLocation
+        mouseDownScreenPoint = location
+        lastDragScreenPoint = location
         lastDragTimestamp = event.timestamp
         dragVelocity = .zero
+        hasDragged = false
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -166,6 +167,11 @@ extension AgentViewController {
         let dx = current.x - previous.x
         let dy = current.y - previous.y
         guard dx != 0 || dy != 0 else { return }
+
+        if let mouseDownScreenPoint = mouseDownScreenPoint,
+           hypot(current.x - mouseDownScreenPoint.x, current.y - mouseDownScreenPoint.y) >= 3 {
+            hasDragged = true
+        }
 
         var frame = window.frame
         frame.origin.x += dx
@@ -182,23 +188,31 @@ extension AgentViewController {
     override func mouseUp(with event: NSEvent) {
         defer {
             lastDragScreenPoint = nil
+            mouseDownScreenPoint = nil
             lastDragTimestamp = 0
+            hasDragged = false
         }
-        applyEdgeSnap()
-        applyThrowInertiaIfNeeded()
-        saveCurrentWindowFrame()
+
+        if hasDragged {
+            applyEdgeSnap()
+            applyThrowInertiaIfNeeded()
+            saveCurrentWindowFrame()
+        } else if event.clickCount == 1,
+                  (NSApplication.shared.delegate as? AppDelegate)?.isSpeechBubblesEnabled() ?? true {
+            speakRandomPhrase()
+        }
     }
-    
+
     override func rightMouseDown(with event: NSEvent) {
         guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else { return }
         let menu = appDelegate.createMainMenu()
         NSMenu.popUpContextMenu(menu, with: event, for: agentView)
     }
-    
+
     @objc func hideAction(sender: AnyObject) {
         agentController.hide()
     }
-    
+
     @objc func optionsAction(sender: AnyObject) {
         let viewController = BalloonViewController(text: "Options are currently minimal.", balloon: agentController.agent?.balloon)
         let popOver = NSPopover()
@@ -292,9 +306,8 @@ extension AgentViewController {
 
     private func applyEdgeSnap() {
         guard (NSApplication.shared.delegate as? AppDelegate)?.isEdgeSnapEnabled() ?? true else { return }
-        guard let window = view.window else { return }
+        guard let window = view.window, let screen = relevantScreen(for: window.frame, window: window) else { return }
         let snapDistance: CGFloat = 18
-        guard let screen = NSScreen.main ?? window.screen else { return }
         let visible = screen.visibleFrame
 
         var frame = clampedFrame(window.frame, in: window)
@@ -321,13 +334,29 @@ extension AgentViewController {
     }
 
     private func clampedFrame(_ frame: CGRect, in window: NSWindow) -> CGRect {
-        guard let screen = NSScreen.main ?? window.screen else { return frame }
+        guard let screen = relevantScreen(for: frame, window: window) else { return frame }
         let visible = screen.visibleFrame
 
         var clamped = frame
         clamped.origin.x = max(visible.minX, min(clamped.origin.x, visible.maxX - clamped.width))
         clamped.origin.y = max(visible.minY, min(clamped.origin.y, visible.maxY - clamped.height))
         return clamped
+    }
+
+    private func relevantScreen(for frame: CGRect, window: NSWindow) -> NSScreen? {
+        let screens = NSScreen.screens
+        if let bestMatch = screens.max(by: {
+            intersectionArea(of: $0.frame, with: frame) < intersectionArea(of: $1.frame, with: frame)
+        }), intersectionArea(of: bestMatch.frame, with: frame) > 0 {
+            return bestMatch
+        }
+        return window.screen ?? screens.first ?? NSScreen.main
+    }
+
+    private func intersectionArea(of lhs: CGRect, with rhs: CGRect) -> CGFloat {
+        let intersection = lhs.intersection(rhs)
+        guard !intersection.isNull else { return 0 }
+        return intersection.width * intersection.height
     }
 
     private func saveCurrentWindowFrame() {
