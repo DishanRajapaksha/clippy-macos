@@ -10,6 +10,17 @@ import Cocoa
 import AVKit
 import SpriteKit
 
+enum AgentControllerError: LocalizedError {
+    case agentCouldNotLoad(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .agentCouldNotLoad(let name):
+            return "The agent \"\(name)\" could not be loaded."
+        }
+    }
+}
+
 class AgentController {
     static let autoAnimateIntervalDefaultsKey = "AutoAnimateIntervalSeconds"
     static let defaultAutoAnimateInterval: TimeInterval = 12.0
@@ -22,25 +33,29 @@ class AgentController {
     var player: AVPlayer = {
         return AVPlayer()
     }()
-    
+
     var agent: Agent?
     var agentView: AgentView?
     private var textureCache: [Int: SKTexture] = [:]
     private let textureCacheLock = NSLock()
-    
+
     var delegate: AgentControllerDelegate?
     var isHidden = true
-    
+
     init() {
     }
-    
+
     convenience init(agentView: AgentView) {
         self.init()
         self.agentView = agentView
     }
-    
+
     func load(name: String) throws {
-        guard let agent = Agent(resourceName: name) else { return }
+        guard let agent = Agent(resourceName: name) else {
+            throw AgentControllerError.agentCouldNotLoad(name)
+        }
+
+        cancelPlayback()
         delegate?.willLoadAgent(agent: agent)
         textureCacheLock.lock()
         textureCache.removeAll(keepingCapacity: true)
@@ -50,33 +65,43 @@ class AgentController {
         restartAutoAnimateTimer()
         delegate?.didLoadAgent(agent: agent)
     }
-    
+
+    func cancelPlayback() {
+        playbackID = UUID()
+        isAnimating = false
+        agentView?.agentSprite.removeAllActions()
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+    }
+
     func audioActionForFrame(frame: AgentFrame) -> SKAction? {
         guard let agent = agent, let soundIndex = frame.soundIndex else { return nil }
         guard let soundURL = agent.soundURL(forIndex: soundIndex) else { return nil }
         let action = SKAction.run {
             let playerItem = AVPlayerItem(url: soundURL)
             self.player.replaceCurrentItem(with: playerItem)
-            self.player.play()
             self.player.volume = self.isMuted ? 0 : 1.0
+            self.player.play()
         }
         return action
     }
-    
+
     func showInitialFrame() {
         guard let agent = agent, let texture = texture(at: 0, for: agent) else { return }
         self.agentView?.agentSprite.texture = texture
     }
-    
+
     func play(animation: AgentAnimation, withSoundEnabled soundEnabled: Bool = true, interruptCurrent: Bool = true, completion: (() -> Void)? = nil) {
         guard let agent = agent else { return }
-        if isAnimating && !interruptCurrent {
-            return
+        if isAnimating {
+            guard interruptCurrent else { return }
+            cancelPlayback()
         }
+
         let currentPlaybackID = UUID()
         playbackID = currentPlaybackID
         isAnimating = true
-        
+
         DispatchQueue.global(qos: .background).async {
             var actions: [SKAction] = []
 
@@ -92,7 +117,7 @@ class AgentController {
                 if soundEnabled, let audioAction = self.audioActionForFrame(frame: frame) {
                     actions.append(audioAction)
                 }
-                
+
                 guard let texture = self.texture(for: frame, in: agent) else {
                     safetyCounter += 1
                     frameIndex = self.nextFrameIndex(after: frameIndex, in: animation)
@@ -104,8 +129,8 @@ class AgentController {
                 safetyCounter += 1
                 frameIndex = self.nextFrameIndex(after: frameIndex, in: animation)
             }
-            
-            DispatchQueue.main.asyncAfter(deadline: .now(), execute: {
+
+            DispatchQueue.main.async {
                 guard self.playbackID == currentPlaybackID else { return }
                 guard !actions.isEmpty else {
                     self.isAnimating = false
@@ -118,7 +143,7 @@ class AgentController {
                     self.isAnimating = false
                     completion?()
                 })
-            })
+            }
         }
     }
 
@@ -187,7 +212,7 @@ class AgentController {
         }
         return nil
     }
-    
+
     func animate() {
         guard let agent = agent else { return }
         guard let animation = agent.animations.randomElement() else { return }
@@ -214,11 +239,11 @@ class AgentController {
 
         return agent.animations.filter { $0.name.localizedCaseInsensitiveContains("idle") }
     }
-    
+
     func hide() {
         delegate?.handleHide()
     }
-    
+
     func show() {
         delegate?.handleShow()
     }
