@@ -108,6 +108,7 @@ final class AgentImporter {
         }
 
         let entries = try archiveEntries(in: url)
+        try validateArchiveEntryTypes(in: url)
         guard entries.count <= Limits.maximumEntryCount else {
             throw AgentImportError.archiveContainsTooManyEntries(entries.count)
         }
@@ -158,6 +159,21 @@ final class AgentImporter {
         return entries
     }
 
+    private func validateArchiveEntryTypes(in url: URL) throws {
+        let result = try runProcess("/usr/bin/unzip", arguments: ["-Z", "-l", url.path])
+        guard result.status == 0 else {
+            throw AgentImportError.archiveExtractionFailed(result.status)
+        }
+
+        let listing = String(data: result.output, encoding: .utf8) ?? ""
+        for line in listing.split(separator: "\n") {
+            let trimmed = line.drop(while: { $0.isWhitespace })
+            if trimmed.first == "l" {
+                throw AgentImportError.unsafeArchiveEntry(String(line))
+            }
+        }
+    }
+
     private func validateArchivePath(_ entry: String) throws {
         guard !entry.isEmpty,
               entry.count <= Limits.maximumPathLength,
@@ -181,7 +197,7 @@ final class AgentImporter {
         guard let enumerator = fileManager.enumerator(
             at: root,
             includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey],
-            options: [.skipsHiddenFiles]
+            options: []
         ) else {
             return
         }
@@ -246,6 +262,9 @@ final class AgentImporter {
         guard stagedStatus.isSupported else {
             throw AgentImportError.copiedAgentCouldNotLoad(stagedStatus.reason ?? "unknown load error")
         }
+        guard Agent(agentURL: stagedURL) != nil else {
+            throw AgentImportError.copiedAgentCouldNotLoad("could not parse agent resources")
+        }
 
         let agentsRoot = Agent.agentsURL()
         var destination = agentsRoot.appendingPathComponent(stagedURL.lastPathComponent, isDirectory: stagedURL.hasDirectoryPath)
@@ -263,9 +282,14 @@ final class AgentImporter {
             }
         }
 
-        let incoming = agentsRoot.appendingPathComponent(".clippy-import-\(UUID().uuidString)-\(destination.lastPathComponent)")
-        defer { try? fileManager.removeItem(at: incoming) }
+        let incomingRoot = agentsRoot.appendingPathComponent(".clippy-import-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: incomingRoot, withIntermediateDirectories: false)
+        defer { try? fileManager.removeItem(at: incomingRoot) }
+        let incoming = incomingRoot.appendingPathComponent(destination.lastPathComponent, isDirectory: stagedURL.hasDirectoryPath)
         try fileManager.copyItem(at: stagedURL, to: incoming)
+        if stagedURL.hasDirectoryPath && stagedURL.lastPathComponent != destination.lastPathComponent {
+            try renameAgentResources(in: incoming, to: destination.deletingPathExtension().lastPathComponent)
+        }
         if incoming.hasDirectoryPath {
             try validateExtractedTree(at: incoming)
         } else {
@@ -279,6 +303,9 @@ final class AgentImporter {
         guard incomingStatus.isSupported else {
             throw AgentImportError.copiedAgentCouldNotLoad(incomingStatus.reason ?? "unknown load error")
         }
+        guard Agent(agentURL: incoming) != nil else {
+            throw AgentImportError.copiedAgentCouldNotLoad("could not parse installed agent resources")
+        }
 
         if shouldReplace {
             try replaceItem(at: destination, with: incoming)
@@ -287,6 +314,57 @@ final class AgentImporter {
         }
 
         return normalizedAgentName(from: destination)
+    }
+
+    private func renameAgentResources(in root: URL, to targetName: String) throws {
+        var baseURL = root
+        if let nested = try fileManager.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ).first(where: {
+            $0.pathExtension.lowercased() == "agent" &&
+                ((try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? $0.hasDirectoryPath)
+        }) {
+            let renamedNested = root.appendingPathComponent("\(targetName).agent", isDirectory: true)
+            if nested.standardizedFileURL != renamedNested.standardizedFileURL {
+                try fileManager.moveItem(at: nested, to: renamedNested)
+            }
+            baseURL = renamedNested
+        }
+
+        guard let definition = try fileManager.contentsOfDirectory(
+            at: baseURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ).first(where: { $0.pathExtension.lowercased() == "acd" }) else {
+            return
+        }
+
+        let sourceName = definition.deletingPathExtension().lastPathComponent
+        guard sourceName != targetName else { return }
+
+        let renamedDefinition = baseURL.appendingPathComponent("\(targetName).acd")
+        try fileManager.moveItem(at: definition, to: renamedDefinition)
+
+        let sourceSpriteMap = baseURL.appendingPathComponent("\(sourceName)_sprite_map.png")
+        if fileManager.fileExists(atPath: sourceSpriteMap.path) {
+            let targetSpriteMap = baseURL.appendingPathComponent("\(targetName)_sprite_map.png")
+            try fileManager.moveItem(at: sourceSpriteMap, to: targetSpriteMap)
+        }
+
+        let soundsURL = baseURL.appendingPathComponent("sounds", isDirectory: true)
+        if let sounds = try? fileManager.contentsOfDirectory(
+            at: soundsURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) {
+            for sound in sounds where sound.lastPathComponent.hasPrefix(sourceName + "_") {
+                let suffix = sound.lastPathComponent.dropFirst(sourceName.count)
+                let renamedSound = soundsURL.appendingPathComponent(targetName + suffix)
+                try fileManager.moveItem(at: sound, to: renamedSound)
+            }
+        }
     }
 
     private func replaceItem(at destination: URL, with incoming: URL) throws {
