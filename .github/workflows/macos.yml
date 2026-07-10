@@ -19,5 +19,10 @@ jobs:
             -project clippy.xcodeproj \
             -scheme "Clippy macOS" \
             -configuration Debug \
+            -derivedDataPath "$PWD/.derived" \
             CODE_SIGNING_ALLOWED=NO \
             build
+
+      - name: Run parser safety tests
+        run: |
+          "$PWD/.derived/Build/Products/Debug/Clippy.app/Contents/MacOS/Clippy" --self-test-parser
