@@ -8,6 +8,7 @@
 
 import Cocoa
 import Foundation
+import UniformTypeIdentifiers
 
 final class ClippyAppDelegate: AppDelegate {
     private let backgroundAgentImporter = AgentImporter()
