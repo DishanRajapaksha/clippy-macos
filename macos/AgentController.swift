@@ -24,6 +24,8 @@ enum AgentControllerError: LocalizedError {
 class AgentController {
     static let autoAnimateIntervalDefaultsKey = "AutoAnimateIntervalSeconds"
     static let defaultAutoAnimateInterval: TimeInterval = 12.0
+    static let randomAutoAnimateInterval: TimeInterval = -1
+    static let randomAutoAnimateRange: ClosedRange<TimeInterval> = 5...60
     static let muteDefaultsKey = "IsMuted"
 
     var isMuted = false
@@ -253,10 +255,14 @@ class AgentController {
         return configured > 0 ? configured : Self.defaultAutoAnimateInterval
     }
 
+    func isRandomAutoAnimateInterval() -> Bool {
+        UserDefaults.standard.double(forKey: Self.autoAnimateIntervalDefaultsKey) == Self.randomAutoAnimateInterval
+    }
+
     func restartAutoAnimateTimer() {
         autoAnimateTimer?.invalidate()
         let configured = UserDefaults.standard.double(forKey: Self.autoAnimateIntervalDefaultsKey)
-        guard configured > 0 else {
+        guard configured > 0 || configured == Self.randomAutoAnimateInterval else {
             autoAnimateTimer = nil
             return
         }
@@ -267,6 +273,10 @@ class AgentController {
     }
 
     private func nextAutoAnimateInterval() -> TimeInterval {
+        if isRandomAutoAnimateInterval() {
+            return TimeInterval.random(in: Self.randomAutoAnimateRange)
+        }
+
         let interval = autoAnimateInterval()
         let lowerBound = max(5, interval * 0.75)
         let upperBound = max(lowerBound, interval * 2)

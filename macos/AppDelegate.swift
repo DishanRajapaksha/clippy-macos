@@ -217,6 +217,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, AgentPreviewViewControllerDe
             menu.addItem(item)
         }
 
+        let randomItem = NSMenuItem(
+            title: "Random (5–60s)",
+            action: #selector(selectRandomAutoAnimateInterval(sender:)),
+            keyEquivalent: ""
+        )
+        randomItem.target = self
+        randomItem.state = configured == AgentController.randomAutoAnimateInterval ? .on : .off
+        menu.addItem(randomItem)
+
         menu.addItem(NSMenuItem.separator())
         let disableItem = NSMenuItem(title: "Off", action: #selector(disableAutoAnimate(sender:)), keyEquivalent: "")
         disableItem.target = self
@@ -268,6 +277,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, AgentPreviewViewControllerDe
         guard let menuItem = sender as? NSMenuItem,
               let interval = menuItem.representedObject as? TimeInterval else { return }
         UserDefaults.standard.set(interval, forKey: AgentController.autoAnimateIntervalDefaultsKey)
+        AppDelegate.agentController?.restartAutoAnimateTimer()
+        autoAnimateMenuItem?.submenu = createAutoAnimateMenu()
+    }
+
+    @objc func selectRandomAutoAnimateInterval(sender: AnyObject) {
+        UserDefaults.standard.set(AgentController.randomAutoAnimateInterval, forKey: AgentController.autoAnimateIntervalDefaultsKey)
         AppDelegate.agentController?.restartAutoAnimateTimer()
         autoAnimateMenuItem?.submenu = createAutoAnimateMenu()
     }
