@@ -58,13 +58,17 @@ Process CPU and resident memory are actual process measurements. Per-agent work 
 
 Use `📎` → `Arrange Agents` to:
 
-- move the current agent to the cursor
+- move the current agent to the cursor once
+- toggle `Follow Current to Cursor` for the active agent
+- stop every cursor-following agent
 - move every agent to a selected display
 - scatter agents
 - stack agents
 - arrange agents in a horizontal line
 - arrange agents in a grid
 - arrange agents in a circle
+
+Follow Cursor is stored per session and restored after relaunch. The character trails just below and to the right of the pointer with smoothed movement. Multiple followers form a small diagonal procession instead of occupying exactly the same point. Clicking and dragging a follower disables the mode for that agent, while applying a desktop layout disables it for all affected agents.
 
 Layouts use the display under the pointer by default. Every resulting window is clamped to the target display's visible frame and its position is persisted.
 
