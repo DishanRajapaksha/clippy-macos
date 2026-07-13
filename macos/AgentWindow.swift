@@ -8,14 +8,7 @@
 
 import Cocoa
 
-protocol AgentWindowSessionDelegate: AnyObject {
-    func agentWindowDidBecomeKey(_ window: AgentWindow)
-    func agentWindowDidMove(_ window: AgentWindow)
-}
-
 class AgentWindow: NSWindow {
-    weak var sessionDelegate: AgentWindowSessionDelegate?
-    var sessionID: UUID?
     private var applicationVisibilityController: ApplicationVisibilityController?
 
     override var collectionBehavior: NSWindow.CollectionBehavior {
@@ -28,20 +21,17 @@ class AgentWindow: NSWindow {
         }
     }
 
-    override init(
-        contentRect: NSRect,
-        styleMask style: NSWindow.StyleMask,
-        backing backingStoreType: NSWindow.BackingStoreType,
-        defer flag: Bool
-    ) {
+    override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
-        level = .floating
+        level = NSWindow.Level.floating
         collectionBehavior = [.canJoinAllSpaces, .stationary]
         canHide = true
         backingType = .buffered
         isMovable = true
         isMovableByWindowBackground = true
         backgroundColor = .clear
+        
+        /// Fixes glitches
         hasShadow = false
         isOpaque = false
         delegate = self
@@ -52,9 +42,9 @@ class AgentWindow: NSWindow {
             visibilityController.start()
         }
     }
-
+    
     override var canBecomeKey: Bool {
-        true
+        return true
     }
 }
 
@@ -65,11 +55,6 @@ extension AgentWindow: NSWindowDelegate {
 
     func windowDidBecomeKey(_ notification: Notification) {
         alphaValue = 1.0
-        sessionDelegate?.agentWindowDidBecomeKey(self)
-    }
-
-    func windowDidMove(_ notification: Notification) {
-        sessionDelegate?.agentWindowDidMove(self)
     }
 }
 
@@ -165,7 +150,7 @@ private final class ApplicationVisibilityController: NSObject, NSMenuDelegate {
             return
         }
 
-        behaviorMenu.addItem(.separator())
+        behaviorMenu.addItem(NSMenuItem.separator())
         let item = NSMenuItem(title: "App Visibility", action: nil, keyEquivalent: "")
         item.representedObject = Self.menuMarker
         item.submenu = visibilityMenu
@@ -197,7 +182,7 @@ private final class ApplicationVisibilityController: NSObject, NSMenuDelegate {
             visibilityMenu.addItem(unavailableItem)
         }
 
-        visibilityMenu.addItem(.separator())
+        visibilityMenu.addItem(NSMenuItem.separator())
 
         let rules = hiddenApplicationRules()
         if rules.isEmpty {
@@ -224,7 +209,7 @@ private final class ApplicationVisibilityController: NSObject, NSMenuDelegate {
                 visibilityMenu.addItem(item)
             }
 
-            visibilityMenu.addItem(.separator())
+            visibilityMenu.addItem(NSMenuItem.separator())
             let clearItem = NSMenuItem(
                 title: "Clear All",
                 action: #selector(clearApplicationRules(_:)),
