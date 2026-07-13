@@ -26,3 +26,10 @@ jobs:
       - name: Run parser safety tests
         run: |
           "$PWD/.derived/Build/Products/Debug/Clippy.app/Contents/MacOS/Clippy" --self-test-parser
+
+      - name: Run automation URL tests
+        run: |
+          "$PWD/.derived/Build/Products/Debug/Clippy.app/Contents/MacOS/Clippy" --self-test-automation
+
+      - name: Validate clippyctl
+        run: zsh -n scripts/clippyctl
