@@ -837,7 +837,7 @@ struct ClippyAppShortcuts: AppShortcutsProvider {
         )
         AppShortcut(
             intent: SayWithClippyIntent(),
-            phrases: ["Make \(.applicationName) say \(\.$text)"],
+            phrases: ["Make \(.applicationName) speak"],
             shortTitle: "Clippy Says",
             systemImageName: "text.bubble"
         )
@@ -855,7 +855,7 @@ struct ClippyAppShortcuts: AppShortcutsProvider {
         )
         AppShortcut(
             intent: SelectClippyAgentIntent(),
-            phrases: ["Use \(\.$agent) in \(.applicationName)"],
+            phrases: ["Select an agent in \(.applicationName)"],
             shortTitle: "Select Agent",
             systemImageName: "person.crop.circle"
         )
