@@ -29,6 +29,7 @@ class AgentController {
     static let muteDefaultsKey = "IsMuted"
 
     var isMuted = false
+    var configuredAutoAnimateInterval = AgentController.defaultAutoAnimateInterval
     var autoAnimateTimer: Timer?
     private var isAnimating = false
     private var playbackID = UUID()
@@ -164,7 +165,6 @@ class AgentController {
             }
         }
 
-        // Fallback: play linearly.
         let next = currentIndex + 1
         return next < animation.frames.count ? next : -1
     }
@@ -251,17 +251,16 @@ class AgentController {
     }
 
     func autoAnimateInterval() -> TimeInterval {
-        let configured = UserDefaults.standard.double(forKey: Self.autoAnimateIntervalDefaultsKey)
-        return configured > 0 ? configured : Self.defaultAutoAnimateInterval
+        configuredAutoAnimateInterval > 0 ? configuredAutoAnimateInterval : Self.defaultAutoAnimateInterval
     }
 
     func isRandomAutoAnimateInterval() -> Bool {
-        UserDefaults.standard.double(forKey: Self.autoAnimateIntervalDefaultsKey) == Self.randomAutoAnimateInterval
+        configuredAutoAnimateInterval == Self.randomAutoAnimateInterval
     }
 
     func restartAutoAnimateTimer() {
         autoAnimateTimer?.invalidate()
-        let configured = UserDefaults.standard.double(forKey: Self.autoAnimateIntervalDefaultsKey)
+        let configured = configuredAutoAnimateInterval
         guard configured > 0 || configured == Self.randomAutoAnimateInterval else {
             autoAnimateTimer = nil
             return
