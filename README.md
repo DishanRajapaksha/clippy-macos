@@ -22,7 +22,7 @@ Clippy is a native macOS menu bar app that runs classic Microsoft Agent characte
   - `Behavior`: per-agent Always on Top, Join All Spaces, Throw Inertia, Edge Snap, and Paired Reactions
   - `Reload`
 
-The Agent Manager window shows each session's active state, character, visibility, mute state, auto-animation interval, paired-reaction setting, current position and display. It also supports focusing or closing individual agents and creating, showing or hiding sessions in bulk.
+The Agent Manager window shows each session's active state, character, visibility, mute state, auto-animation interval, paired-reaction setting, current position and display. It also supports focusing or closing individual agents and creating, showing or hiding sessions in bulk. Its size and position are restored by macOS.
 
 Each agent window keeps its own character, position, mute state, speech preference, animation interval, window behaviour, and paired-reaction preference. Sessions are restored the next time Clippy launches.
 
