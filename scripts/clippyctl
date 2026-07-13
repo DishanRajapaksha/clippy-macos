@@ -1,0 +1,91 @@
+#!/bin/zsh
+set -euo pipefail
+
+usage() {
+    local status="${1:-64}"
+    cat >&2 <<'EOF'
+Usage:
+  clippyctl show|hide|toggle|stop|random-agent|reload
+  clippyctl say TEXT...
+  clippyctl animate [ANIMATION...]
+  clippyctl agent AGENT...
+  clippyctl mute on|off
+  clippyctl bubbles on|off
+  clippyctl always-on-top on|off
+  clippyctl all-spaces on|off
+  clippyctl position top-left|top-right|bottom-left|bottom-right|center
+  clippyctl move X Y
+  clippyctl auto-animate off|random|SECONDS
+EOF
+    exit "$status"
+}
+
+urlencode() {
+    /usr/bin/osascript -l JavaScript \
+        -e 'function run(argv) { return encodeURIComponent(argv[0]); }' \
+        -- "$1"
+}
+
+boolean_value() {
+    local value
+    value="$(printf %s "$1" | tr '[:upper:]' '[:lower:]')"
+    case "$value" in
+        on|true|yes|1|enable|enabled) print 'true' ;;
+        off|false|no|0|disable|disabled) print 'false' ;;
+        *)
+            print -u2 "clippyctl: expected on or off, got: $1"
+            usage
+            ;;
+    esac
+}
+
+(( $# > 0 )) || usage
+command="$1"
+shift
+
+case "$command" in
+    show|hide|toggle|stop|random-agent|reload)
+        (( $# == 0 )) || usage
+        url="clippy://$command"
+        ;;
+    say)
+        (( $# > 0 )) || usage
+        url="clippy://say?text=$(urlencode "$*")"
+        ;;
+    animate)
+        if (( $# == 0 )); then
+            url='clippy://animate'
+        else
+            url="clippy://animate?name=$(urlencode "$*")"
+        fi
+        ;;
+    agent)
+        (( $# > 0 )) || usage
+        url="clippy://agent?name=$(urlencode "$*")"
+        ;;
+    mute|bubbles|always-on-top|all-spaces)
+        (( $# == 1 )) || usage
+        url="clippy://$command?enabled=$(boolean_value "$1")"
+        ;;
+    position)
+        (( $# == 1 )) || usage
+        url="clippy://position?name=$(urlencode "$1")"
+        ;;
+    move)
+        (( $# == 2 )) || usage
+        url="clippy://move?x=$(urlencode "$1")&y=$(urlencode "$2")"
+        ;;
+    auto-animate)
+        (( $# == 1 )) || usage
+        url="clippy://auto-animate?value=$(urlencode "$1")"
+        ;;
+    -h|--help|help)
+        usage 0
+        ;;
+    *)
+        print -u2 "clippyctl: unknown command: $command"
+        usage
+        ;;
+esac
+
+/usr/bin/open "$url"
