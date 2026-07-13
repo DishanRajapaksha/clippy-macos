@@ -321,3 +321,16 @@ private final class ApplicationVisibilityController: NSObject, NSMenuDelegate {
         UserDefaults.standard.set(rules, forKey: Self.defaultsKey)
     }
 }
+
+extension AppDelegate {
+    // Compatibility for automation actions that still write the historical
+    // defaults before applying behaviour to the active agent session.
+    func applyWindowBehavior() {
+        guard let session = sessionManager.activeSession else { return }
+        let defaults = UserDefaults.standard
+        sessionManager.updateSettings(for: session.id) {
+            $0.alwaysOnTop = defaults.bool(forKey: Self.alwaysOnTopDefaultsKey)
+            $0.joinAllSpaces = defaults.bool(forKey: Self.joinAllSpacesDefaultsKey)
+        }
+    }
+}
