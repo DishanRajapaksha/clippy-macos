@@ -8,7 +8,15 @@
 
 import Cocoa
 
+protocol AgentWindowSessionDelegate: AnyObject {
+    func agentWindowDidBecomeKey(_ window: AgentWindow)
+    func agentWindowDidMove(_ window: AgentWindow)
+}
+
 class AgentWindow: NSWindow {
+    weak var sessionDelegate: AgentWindowSessionDelegate?
+    var sessionID: UUID?
+
     override var collectionBehavior: NSWindow.CollectionBehavior {
         get { super.collectionBehavior }
         set {
@@ -28,13 +36,11 @@ class AgentWindow: NSWindow {
         isMovable = true
         isMovableByWindowBackground = true
         backgroundColor = .clear
-        
-        /// Fixes glitches
         hasShadow = false
         isOpaque = false
         delegate = self
     }
-    
+
     override var canBecomeKey: Bool {
         return true
     }
@@ -47,5 +53,10 @@ extension AgentWindow: NSWindowDelegate {
 
     func windowDidBecomeKey(_ notification: Notification) {
         alphaValue = 1.0
+        sessionDelegate?.agentWindowDidBecomeKey(self)
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        sessionDelegate?.agentWindowDidMove(self)
     }
 }
