@@ -4,16 +4,26 @@ Clippy is a native macOS menu bar app that runs classic Microsoft Agent characte
 
 ## Controls
 
-- Drag with mouse: move Clippy
-- Right-click on Clippy: `Animate!`
-- Space bar: animate
+- Drag with mouse: move the selected agent
+- Right-click an agent: open controls for that window
+- Space bar: animate the selected agent
 - Double-click: animate
 - Menu bar (`📎`):
-  - `Show` / `Hide`
-  - `Agents`
-  - `Auto Animate` interval (or Off)
-  - `Mute`
+  - `Show Current` / `Hide Current`
+  - `Show All` / `Hide All`
+  - `New Agent`: open another independent character window
+  - `Agent Windows`: select and bring forward a running character
+  - `Close Current Agent`
+  - `Change Current Agent`
+  - `Auto Animate` interval or Off
+  - `Mute Current`
+  - `Speech Bubbles`
+  - `Behavior`: per-agent Always on Top, Join All Spaces, Throw Inertia, Edge Snap, and Paired Reactions
   - `Reload`
+
+Each agent window keeps its own character, position, mute state, speech preference, animation interval, window behaviour, and paired-reaction preference. Sessions are restored the next time Clippy launches.
+
+When Paired Reactions are enabled for both characters, agents greet and react once when their windows approach one another. They become eligible for another reaction after moving apart.
 
 ## Build and Run
 
@@ -53,7 +63,7 @@ The app can import Microsoft Agent `*.acs` files directly.
 1. Click `📎` in the menu bar.
 2. Choose `Import Agent…`.
 3. Select one or more `*.acs`, `*.agent`, or `*.agent.zip` files.
-4. Select the imported character under `📎` → `Agents`.
+4. Select the imported character under `📎` → `Change Current Agent` or create it from `New Agent`.
 
 The older extracted-resource flow is still available if you already have a decompiled agent directory.
 
@@ -84,7 +94,7 @@ make convert-agent AGENT_PATH=agents/CLIPPIT NEW_NAME=clippy
 2. Choose `Show in Finder`.
 3. Move `NEW_NAME.agent` into the Agents directory.
 4. Click `📎` → `Reload`.
-5. Select the new agent under `📎` → `Agents`.
+5. Select the new agent under `📎` → `Change Current Agent` or `New Agent`.
 
 ## Attributions
 
