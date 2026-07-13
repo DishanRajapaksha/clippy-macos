@@ -9,6 +9,7 @@
 import Cocoa
 import AVKit
 import SpriteKit
+import Darwin
 
 enum AgentControllerError: LocalizedError {
     case agentCouldNotLoad(String)
@@ -61,6 +62,7 @@ class AgentController {
     var isHidden = true
 
     init() {
+        AgentResourceMonitorMenuInstaller.installWhenReady()
     }
 
     convenience init(agentView: AgentView) {
@@ -354,5 +356,426 @@ class AgentController {
         let lowerBound = max(5, interval * 0.75)
         let upperBound = max(lowerBound, interval * 2)
         return TimeInterval.random(in: lowerBound...upperBound)
+    }
+}
+
+private enum AgentResourceMonitorMenuInstaller {
+    private static let marker = "ClippyAgentResourceMonitorMenuItem"
+    private static var installed = false
+
+    static func installWhenReady() {
+        DispatchQueue.main.async {
+            installIfNeeded()
+        }
+    }
+
+    private static func installIfNeeded() {
+        guard !installed,
+              let appDelegate = NSApplication.shared.delegate as? AppDelegate,
+              let menu = appDelegate.statusItem?.menu else { return }
+
+        if menu.items.contains(where: { $0.identifier?.rawValue == marker }) {
+            installed = true
+            return
+        }
+
+        let item = NSMenuItem(
+            title: "Resource Monitor…",
+            action: #selector(AgentResourceMonitorWindowController.showMonitor(_:)),
+            keyEquivalent: ""
+        )
+        item.identifier = NSUserInterfaceItemIdentifier(marker)
+        item.target = AgentResourceMonitorWindowController.shared
+
+        if let managerIndex = menu.items.firstIndex(where: { $0.title == "Agent Manager…" }) {
+            menu.insertItem(item, at: managerIndex + 1)
+        } else if let windowsIndex = menu.items.firstIndex(where: { $0.title == "Agent Windows" }) {
+            menu.insertItem(item, at: windowsIndex + 1)
+        } else {
+            menu.insertItem(item, at: min(5, menu.numberOfItems))
+        }
+        installed = true
+    }
+}
+
+private struct ProcessResourceSnapshot {
+    let cpuPercent: Double
+    let residentMemoryBytes: UInt64
+}
+
+private final class ProcessResourceSampler {
+    private var previousWallTime: TimeInterval?
+    private var previousCPUTime: TimeInterval?
+
+    func reset() {
+        previousWallTime = nil
+        previousCPUTime = nil
+    }
+
+    func sample() -> ProcessResourceSnapshot {
+        let wallTime = ProcessInfo.processInfo.systemUptime
+        let cpuTime = Self.totalCPUTime()
+        let cpuPercent: Double
+
+        if let previousWallTime,
+           let previousCPUTime {
+            let wallDelta = max(0.001, wallTime - previousWallTime)
+            let cpuDelta = max(0, cpuTime - previousCPUTime)
+            cpuPercent = cpuDelta / wallDelta * 100
+        } else {
+            cpuPercent = 0
+        }
+
+        self.previousWallTime = wallTime
+        self.previousCPUTime = cpuTime
+        return ProcessResourceSnapshot(
+            cpuPercent: cpuPercent,
+            residentMemoryBytes: Self.residentMemoryBytes()
+        )
+    }
+
+    private static func totalCPUTime() -> TimeInterval {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return 0 }
+        let user = TimeInterval(usage.ru_utime.tv_sec)
+            + TimeInterval(usage.ru_utime.tv_usec) / 1_000_000
+        let system = TimeInterval(usage.ru_stime.tv_sec)
+            + TimeInterval(usage.ru_stime.tv_usec) / 1_000_000
+        return user + system
+    }
+
+    private static func residentMemoryBytes() -> UInt64 {
+        var info = mach_task_basic_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<mach_task_basic_info_data_t>.size
+                / MemoryLayout<natural_t>.size
+        )
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(
+                to: integer_t.self,
+                capacity: Int(count)
+            ) { rebound in
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(MACH_TASK_BASIC_INFO),
+                    rebound,
+                    &count
+                )
+            }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        return UInt64(info.resident_size)
+    }
+}
+
+private struct AgentResourceMonitorRow {
+    let sessionID: UUID
+    let agentName: String
+    let status: String
+    let workPercent: Double
+    let textureCacheBytes: UInt64
+    let renderedFrameCount: UInt64
+    let framesPerSecond: Double
+    let speechQueueDepth: Int
+}
+
+final class AgentResourceMonitorWindowController:
+    NSWindowController,
+    NSTableViewDataSource,
+    NSTableViewDelegate,
+    NSWindowDelegate
+{
+    static let shared = AgentResourceMonitorWindowController()
+
+    private enum Column: String, CaseIterable {
+        case agent
+        case status
+        case work
+        case cache
+        case frames
+        case fps
+        case speech
+
+        var title: String {
+            switch self {
+            case .agent: return "Agent"
+            case .status: return "Status"
+            case .work: return "Work %"
+            case .cache: return "Texture Cache"
+            case .frames: return "Frames"
+            case .fps: return "FPS"
+            case .speech: return "Speech"
+            }
+        }
+
+        var width: CGFloat {
+            switch self {
+            case .agent: return 130
+            case .status: return 190
+            case .work: return 75
+            case .cache: return 105
+            case .frames: return 90
+            case .fps: return 65
+            case .speech: return 70
+            }
+        }
+    }
+
+    private let tableView = NSTableView()
+    private let processLabel = NSTextField(labelWithString: "Collecting resource usage…")
+    private let processSampler = ProcessResourceSampler()
+    private var rows: [AgentResourceMonitorRow] = []
+    private var previousPreparationWork: [UUID: TimeInterval] = [:]
+    private var previousAgentSampleTime: TimeInterval?
+    private var timer: Timer?
+
+    private var sessionManager: AgentSessionManager? {
+        (NSApplication.shared.delegate as? AppDelegate)?.sessionManager
+    }
+
+    private init() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 790, height: 380),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Agent Resource Monitor"
+        window.minSize = NSSize(width: 650, height: 260)
+        window.isReleasedWhenClosed = false
+        window.setFrameAutosaveName("ClippyAgentResourceMonitorWindow")
+
+        super.init(window: window)
+        window.delegate = self
+        configureContent()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        timer?.invalidate()
+    }
+
+    @objc func showMonitor(_ sender: Any?) {
+        resetSamplingBaseline()
+        sample()
+        showWindow(sender)
+        window?.makeKeyAndOrderFront(sender)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        startSampling()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        rows.count
+    }
+
+    func tableView(
+        _ tableView: NSTableView,
+        viewFor tableColumn: NSTableColumn?,
+        row: Int
+    ) -> NSView? {
+        guard rows.indices.contains(row),
+              let identifier = tableColumn?.identifier.rawValue,
+              let column = Column(rawValue: identifier) else { return nil }
+        let item = rows[row]
+        let text: String
+        let tooltip: String?
+
+        switch column {
+        case .agent:
+            text = item.agentName
+            tooltip = item.sessionID.uuidString
+        case .status:
+            text = item.status
+            tooltip = "Current animation and visibility state"
+        case .work:
+            text = String(format: "%.1f%%", item.workPercent)
+            tooltip = "Estimated wall-time share spent preparing this agent's animation frames. Per-agent kernel CPU is not separable inside one process."
+        case .cache:
+            text = Self.formatBytes(item.textureCacheBytes)
+            tooltip = "Estimated bytes retained by this agent's decoded texture cache"
+        case .frames:
+            text = NumberFormatter.localizedString(
+                from: NSNumber(value: item.renderedFrameCount),
+                number: .decimal
+            )
+            tooltip = "Frames presented since this agent session started"
+        case .fps:
+            text = String(format: "%.0f", item.framesPerSecond)
+            tooltip = "Frames presented during the previous one-second window"
+        case .speech:
+            text = "\(item.speechQueueDepth)"
+            tooltip = "Active or queued speech bubbles. Current speech replaces an older bubble, so the depth is normally 0 or 1."
+        }
+
+        let label = NSTextField(labelWithString: text)
+        label.lineBreakMode = .byTruncatingTail
+        label.toolTip = tooltip
+        return padded(label)
+    }
+
+    private func configureContent() {
+        guard let window else { return }
+        let root = NSView()
+        window.contentView = root
+
+        processLabel.translatesAutoresizingMaskIntoConstraints = false
+        processLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        processLabel.textColor = .secondaryLabelColor
+        processLabel.toolTip = "Process CPU is sampled from getrusage. Memory is the process resident set."
+        root.addSubview(processLabel)
+
+        for column in Column.allCases {
+            let tableColumn = NSTableColumn(
+                identifier: NSUserInterfaceItemIdentifier(column.rawValue)
+            )
+            tableColumn.title = column.title
+            tableColumn.width = column.width
+            tableColumn.minWidth = max(55, column.width * 0.7)
+            tableView.addTableColumn(tableColumn)
+        }
+        tableView.delegate = self
+        tableView.dataSource = self
+        tableView.rowHeight = 30
+        tableView.usesAlternatingRowBackgroundColors = true
+        tableView.allowsMultipleSelection = false
+
+        let scrollView = NSScrollView()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.documentView = tableView
+        root.addSubview(scrollView)
+
+        let footer = NSTextField(
+            labelWithString: "Process CPU and resident memory are actual app-wide measurements. Work % and texture cache are per-agent estimates."
+        )
+        footer.translatesAutoresizingMaskIntoConstraints = false
+        footer.font = .systemFont(ofSize: 11)
+        footer.textColor = .secondaryLabelColor
+        footer.lineBreakMode = .byTruncatingTail
+        footer.toolTip = footer.stringValue
+        root.addSubview(footer)
+
+        NSLayoutConstraint.activate([
+            processLabel.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
+            processLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            processLabel.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -12),
+
+            scrollView.topAnchor.constraint(equalTo: processLabel.bottomAnchor, constant: 10),
+            scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            scrollView.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -8),
+
+            footer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            footer.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10)
+        ])
+    }
+
+    private func startSampling() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            self?.sample()
+        }
+        if let timer {
+            RunLoop.main.add(timer, forMode: .common)
+        }
+    }
+
+    private func resetSamplingBaseline() {
+        processSampler.reset()
+        previousPreparationWork.removeAll()
+        previousAgentSampleTime = nil
+    }
+
+    private func sample() {
+        let now = ProcessInfo.processInfo.systemUptime
+        let elapsed = previousAgentSampleTime.map { max(0.001, now - $0) } ?? 1
+        previousAgentSampleTime = now
+
+        var currentRows: [AgentResourceMonitorRow] = []
+        var activeIDs: Set<UUID> = []
+        var totalCacheBytes: UInt64 = 0
+        var totalFPS: Double = 0
+
+        for session in sessionManager?.sessions ?? [] {
+            let snapshot = session.controller.resourceSnapshot()
+            let previousWork = previousPreparationWork[session.id]
+                ?? snapshot.preparationWorkSeconds
+            let workDelta = max(0, snapshot.preparationWorkSeconds - previousWork)
+            previousPreparationWork[session.id] = snapshot.preparationWorkSeconds
+            activeIDs.insert(session.id)
+
+            let status: String
+            if !session.window.isVisible || session.controller.isHidden {
+                status = "Hidden"
+            } else if snapshot.isAnimating, let name = snapshot.currentAnimationName {
+                status = session.viewController.speechQueueDepth > 0
+                    ? "Animating \(name) + speech"
+                    : "Animating \(name)"
+            } else if session.viewController.speechQueueDepth > 0 {
+                status = "Speaking"
+            } else {
+                status = "Idle"
+            }
+
+            totalCacheBytes += snapshot.textureCacheBytes
+            totalFPS += snapshot.framesPerSecond
+            currentRows.append(
+                AgentResourceMonitorRow(
+                    sessionID: session.id,
+                    agentName: session.displayName,
+                    status: status,
+                    workPercent: workDelta / elapsed * 100,
+                    textureCacheBytes: snapshot.textureCacheBytes,
+                    renderedFrameCount: snapshot.renderedFrameCount,
+                    framesPerSecond: snapshot.framesPerSecond,
+                    speechQueueDepth: session.viewController.speechQueueDepth
+                )
+            )
+        }
+
+        previousPreparationWork = previousPreparationWork.filter {
+            activeIDs.contains($0.key)
+        }
+        rows = currentRows
+        tableView.reloadData()
+
+        let process = processSampler.sample()
+        processLabel.stringValue = [
+            "Process CPU \(String(format: "%.1f%%", process.cpuPercent))",
+            "Resident \(Self.formatBytes(process.residentMemoryBytes))",
+            "Texture cache \(Self.formatBytes(totalCacheBytes))",
+            "Agent FPS \(String(format: "%.0f", totalFPS))",
+            "\(rows.count) agent\(rows.count == 1 ? "" : "s")"
+        ].joined(separator: "  ·  ")
+    }
+
+    private func padded(_ view: NSView) -> NSView {
+        let container = NSView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 4),
+            view.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -4),
+            view.centerYAnchor.constraint(equalTo: container.centerYAnchor)
+        ])
+        return container
+    }
+
+    private static func formatBytes(_ bytes: UInt64) -> String {
+        ByteCountFormatter.string(
+            fromByteCount: Int64(clamping: bytes),
+            countStyle: .memory
+        )
     }
 }
