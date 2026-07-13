@@ -13,6 +13,10 @@ Clippy is a native macOS menu bar app that runs classic Microsoft Agent characte
   - `Agents`
   - `Auto Animate` interval (or Off)
   - `Mute`
+  - `Behavior` → `App Visibility`:
+    - Toggle `Hide in <foreground app>` to add or remove a per-app rule
+    - Select a saved application to remove its rule, or use `Clear All`
+    - Clippy hides when a configured app becomes active and returns without stealing focus when you leave it
   - `Reload`
 
 ## Build and Run
