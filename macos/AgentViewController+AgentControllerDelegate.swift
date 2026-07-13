@@ -101,8 +101,13 @@ private final class AgentScreenMenuItem: NSMenuItem {
     var screenIndex: Int = 0
 }
 
-private final class AgentLayoutController: NSObject {
+private final class AgentLayoutController: NSObject, NSMenuDelegate {
     static let shared = AgentLayoutController()
+
+    private static let followCursorDefaultsKey = "FollowCursorSessionIDs"
+    private let followInterval: TimeInterval = 1.0 / 60.0
+    private let followSmoothing: CGFloat = 0.22
+    private var followTimer: Timer?
 
     private enum Layout {
         case scatter
@@ -118,7 +123,39 @@ private final class AgentLayoutController: NSObject {
 
     func makeMenu() -> NSMenu {
         let menu = NSMenu(title: "Arrange Agents")
+        menu.delegate = self
+        rebuild(menu)
+        startFollowTimerIfNeeded()
+        return menu
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        rebuild(menu)
+    }
+
+    private func rebuild(_ menu: NSMenu) {
+        menu.removeAllItems()
         addItem("Move Current to Cursor", action: #selector(moveCurrentToCursor(_:)), to: menu)
+
+        let followItem = menu.addItem(
+            withTitle: "Follow Current to Cursor",
+            action: #selector(toggleFollowCurrentToCursor(_:)),
+            keyEquivalent: ""
+        )
+        followItem.target = self
+        if let activeID = sessionManager?.activeSession?.id.uuidString {
+            followItem.state = followedSessionIDs().contains(activeID) ? .on : .off
+        } else {
+            followItem.isEnabled = false
+        }
+
+        let stopFollowingItem = menu.addItem(
+            withTitle: "Stop All Cursor Following",
+            action: #selector(stopAllCursorFollowing(_:)),
+            keyEquivalent: ""
+        )
+        stopFollowingItem.target = self
+        stopFollowingItem.isEnabled = !followedSessionIDs().isEmpty
 
         let displayItem = NSMenuItem(title: "Move All to Display", action: nil, keyEquivalent: "")
         displayItem.submenu = makeDisplayMenu()
@@ -130,7 +167,6 @@ private final class AgentLayoutController: NSObject {
         addItem("Horizontal Line", action: #selector(line(_:)), to: menu)
         addItem("Grid", action: #selector(grid(_:)), to: menu)
         addItem("Circle", action: #selector(circle(_:)), to: menu)
-        return menu
     }
 
     private func makeDisplayMenu() -> NSMenu {
@@ -166,6 +202,39 @@ private final class AgentLayoutController: NSObject {
             y: pointer.y - session.window.frame.height / 2
         )
         move(session, to: origin, on: screen)
+    }
+
+    @objc private func toggleFollowCurrentToCursor(_ sender: NSMenuItem) {
+        guard let session = sessionManager?.activeSession else { return }
+        var identifiers = followedSessionIDs()
+        let identifier = session.id.uuidString
+
+        if identifiers.remove(identifier) != nil {
+            saveFollowedSessionIDs(identifiers)
+            sessionManager?.updateWindowFrame(for: session.id, frame: session.window.frame)
+        } else {
+            identifiers.insert(identifier)
+            saveFollowedSessionIDs(identifiers)
+            NSApplication.shared.unhide(nil)
+            if session.controller.isHidden {
+                session.controller.show()
+            }
+            session.window.orderFront(nil)
+        }
+
+        sender.state = identifiers.contains(identifier) ? .on : .off
+        startFollowTimerIfNeeded()
+    }
+
+    @objc private func stopAllCursorFollowing(_ sender: Any?) {
+        guard let manager = sessionManager else { return }
+        let followed = followedSessionIDs()
+        for session in manager.sessions where followed.contains(session.id.uuidString) {
+            manager.updateWindowFrame(for: session.id, frame: session.window.frame)
+        }
+        saveFollowedSessionIDs([])
+        followTimer?.invalidate()
+        followTimer = nil
     }
 
     @objc private func moveAllToDisplay(_ sender: AgentScreenMenuItem) {
@@ -205,11 +274,104 @@ private final class AgentLayoutController: NSObject {
         return NSScreen.screens.first(where: { $0.frame.contains(point) })
     }
 
+    private func startFollowTimerIfNeeded() {
+        guard !followedSessionIDs().isEmpty else {
+            followTimer?.invalidate()
+            followTimer = nil
+            return
+        }
+        guard followTimer == nil else { return }
+
+        let timer = Timer(timeInterval: followInterval, repeats: true) { [weak self] _ in
+            self?.updateCursorFollowers()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        followTimer = timer
+    }
+
+    private func updateCursorFollowers() {
+        guard let manager = sessionManager else { return }
+        var identifiers = followedSessionIDs()
+        var followedSessions = manager.sessions.filter { identifiers.contains($0.id.uuidString) }
+
+        let liveIdentifiers = Set(followedSessions.map { $0.id.uuidString })
+        if liveIdentifiers != identifiers {
+            identifiers.formIntersection(liveIdentifiers)
+            saveFollowedSessionIDs(identifiers)
+        }
+
+        guard !followedSessions.isEmpty else {
+            followTimer?.invalidate()
+            followTimer = nil
+            return
+        }
+
+        let pointer = NSEvent.mouseLocation
+        if NSEvent.pressedMouseButtons != 0 {
+            let manuallyGrabbed = followedSessions.filter { $0.window.frame.contains(pointer) }
+            if !manuallyGrabbed.isEmpty {
+                for session in manuallyGrabbed {
+                    identifiers.remove(session.id.uuidString)
+                    manager.updateWindowFrame(for: session.id, frame: session.window.frame)
+                }
+                saveFollowedSessionIDs(identifiers)
+                followedSessions.removeAll { session in
+                    manuallyGrabbed.contains { $0.id == session.id }
+                }
+            }
+        }
+
+        guard let screen = screenContainingCursor() else { return }
+        for (index, session) in followedSessions.enumerated() where session.window.isVisible {
+            let diagonalOffset = CGFloat(index) * 22
+            let proposed = CGPoint(
+                x: pointer.x + 18 + diagonalOffset,
+                y: pointer.y - session.window.frame.height - 18 - diagonalOffset
+            )
+            let target = clampedOrigin(proposed, for: session.window.frame.size, on: screen)
+            let current = session.window.frame.origin
+            let next = CGPoint(
+                x: current.x + (target.x - current.x) * followSmoothing,
+                y: current.y + (target.y - current.y) * followSmoothing
+            )
+
+            guard hypot(next.x - current.x, next.y - current.y) >= 0.25 else { continue }
+            let delegate = session.window.delegate
+            session.window.delegate = nil
+            session.window.setFrameOrigin(next)
+            session.window.delegate = delegate
+        }
+
+        if identifiers.isEmpty {
+            followTimer?.invalidate()
+            followTimer = nil
+        }
+    }
+
+    private func followedSessionIDs() -> Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: Self.followCursorDefaultsKey) ?? [])
+    }
+
+    private func saveFollowedSessionIDs(_ identifiers: Set<String>) {
+        UserDefaults.standard.set(identifiers.sorted(), forKey: Self.followCursorDefaultsKey)
+    }
+
+    private func clampedOrigin(_ proposed: CGPoint, for size: CGSize, on screen: NSScreen) -> CGPoint {
+        let visible = screen.visibleFrame
+        let maxX = max(visible.minX, visible.maxX - size.width)
+        let maxY = max(visible.minY, visible.maxY - size.height)
+        return CGPoint(
+            x: max(visible.minX, min(proposed.x, maxX)),
+            y: max(visible.minY, min(proposed.y, maxY))
+        )
+    }
+
     private func arrange(_ layout: Layout, on screen: NSScreen?) {
         guard let screen,
               let sessions = sessionManager?.sessions,
               !sessions.isEmpty else { return }
 
+        disableFollowing(for: sessions)
         NSApplication.shared.unhide(nil)
         let visible = screen.visibleFrame.insetBy(dx: 24, dy: 24)
 
@@ -279,6 +441,15 @@ private final class AgentLayoutController: NSObject {
         }
 
         sessionManager?.persistSessions()
+    }
+
+    private func disableFollowing(for sessions: [AgentSession]) {
+        var identifiers = followedSessionIDs()
+        for session in sessions {
+            identifiers.remove(session.id.uuidString)
+        }
+        saveFollowedSessionIDs(identifiers)
+        startFollowTimerIfNeeded()
     }
 
     private func move(_ session: AgentSession, to proposedOrigin: CGPoint, on screen: NSScreen) {
