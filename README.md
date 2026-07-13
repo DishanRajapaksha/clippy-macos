@@ -30,8 +30,61 @@ Useful targets:
 - `make build`
 - `make run`
 - `make package` (creates a Release zip under `dist/`)
+- `make install-clippyctl` (installs the automation wrapper under `~/.local/bin` by default)
 - `make clean`
-- `make open` (opens `clippy.xcodeproj` in Xcode)
+- `make open` (opens `Clippy.xcodeproj` in Xcode)
+
+## Automation
+
+Clippy registers a `clippy://` URL scheme so scripts, CI jobs and personal automations can control the running app. Opening a URL launches Clippy when necessary.
+
+```sh
+open 'clippy://show'
+open 'clippy://say?text=Build%20finished'
+open 'clippy://animate'
+open 'clippy://animate?name=Congratulate'
+open 'clippy://agent?name=merlin'
+```
+
+The URL API supports:
+
+- `clippy://show`
+- `clippy://say?text=TEXT`
+- `clippy://animate` for a random animation
+- `clippy://animate?name=ANIMATION`
+- `clippy://agent?name=AGENT`
+
+Path values are accepted too, for example `clippy://agent/merlin`. Query values are safer for text containing spaces or punctuation.
+
+### clippyctl
+
+`scripts/clippyctl` is a small wrapper around the URL API. It handles URL encoding before calling macOS `open`.
+
+```sh
+make install-clippyctl
+
+clippyctl show
+clippyctl say "The deployment is complete"
+clippyctl animate Congratulate
+clippyctl agent merlin
+```
+
+Override the installation prefix when needed:
+
+```sh
+make install-clippyctl PREFIX=/usr/local
+```
+
+### macOS Shortcuts
+
+After launching the app once, Clippy provides these App Intents in Shortcuts:
+
+- Show Clippy
+- Make Clippy Say
+- Animate Clippy
+- Select Clippy Agent
+
+The same actions are available to Siri through the shortcut phrases macOS exposes for the app.
 
 ## Publish Binaries
 
