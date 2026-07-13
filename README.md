@@ -14,6 +14,7 @@ Clippy is a native macOS menu bar app that runs classic Microsoft Agent characte
   - `New Agent`: open another independent character window
   - `Agent Windows`: select and bring forward a running character
   - `Agent Manager…`: open a table of every running session with per-agent controls
+  - `Resource Monitor…`: inspect live process and per-agent performance measurements
   - `Arrange Agents`:
     - move the current agent to the cursor
     - move all agents to a selected display
@@ -27,6 +28,8 @@ Clippy is a native macOS menu bar app that runs classic Microsoft Agent characte
   - `Reload`
 
 The Agent Manager window shows each session's active state, character, visibility, mute state, auto-animation interval, paired-reaction setting, current position and display. It also supports focusing or closing individual agents and creating, showing or hiding sessions in bulk. Its size and position are restored by macOS.
+
+The Resource Monitor samples only while its window is open. It shows actual app-wide process CPU and resident memory, plus each agent's current status, estimated animation-preparation work, decoded texture-cache size, rendered-frame total, one-second FPS and active speech depth. Per-agent work and cache figures are estimates because every agent runs inside the same macOS process.
 
 Arrange Agents uses the display under the pointer by default. Explicit display moves use a grid, and every resulting position is clamped to the selected display's visible area and persisted with the session.
 
