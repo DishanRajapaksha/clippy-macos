@@ -8,6 +8,10 @@
 
 import Cocoa
 
+func max<T: Comparable>(_ first: T, _ second: T, _ third: T) -> T {
+    Swift.max(Swift.max(first, second), third)
+}
+
 protocol AgentWindowSessionDelegate: AnyObject {
     func agentWindowDidBecomeKey(_ window: AgentWindow)
     func agentWindowDidMove(_ window: AgentWindow)
