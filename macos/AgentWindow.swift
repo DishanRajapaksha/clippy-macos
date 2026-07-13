@@ -64,3 +64,11 @@ extension AgentWindow: NSWindowDelegate {
         sessionDelegate?.agentWindowDidMove(self)
     }
 }
+
+extension AppDelegate {
+    // Compatibility for preview-management code that predates multi-session
+    // windows. New code should route through sessionManager explicitly.
+    static var agentController: AgentController? {
+        (NSApplication.shared.delegate as? AppDelegate)?.agentController
+    }
+}
