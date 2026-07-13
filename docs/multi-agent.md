@@ -34,7 +34,7 @@ The manager window restores its previous size and position.
 
 ## Resource Monitor
 
-Open `📎` → `Resource Monitor…` to inspect live resource use. Sampling runs once per second only while the window is open.
+Open `📎` → `Resource Monitor…` to inspect live resource use. Sampling runs once per second only while the window is open, and the timer stops when the monitor closes. Hidden agents remain listed so their retained resources are still visible.
 
 App-wide measurements:
 
