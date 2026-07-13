@@ -36,25 +36,43 @@ Useful targets:
 
 ## Automation
 
-Clippy registers a `clippy://` URL scheme so scripts, CI jobs and personal automations can control the running app. Opening a URL launches Clippy when necessary.
+Clippy registers a `clippy://` URL scheme so scripts, CI jobs and personal automations can control the app. Opening a URL launches Clippy when necessary.
+
+### URL API
+
+| Action | URL |
+|---|---|
+| Show | `clippy://show` |
+| Hide | `clippy://hide` |
+| Toggle visibility | `clippy://toggle` |
+| Say text | `clippy://say?text=TEXT` |
+| Random animation | `clippy://animate` |
+| Named animation | `clippy://animate?name=ANIMATION` |
+| Stop animation, audio and automation speech | `clippy://stop` |
+| Select an agent | `clippy://agent?name=AGENT` |
+| Select a random agent | `clippy://random-agent` |
+| Reload agent and animation menus | `clippy://reload` |
+| Set mute | `clippy://mute?enabled=true` |
+| Set click-triggered speech bubbles | `clippy://bubbles?enabled=false` |
+| Set always-on-top | `clippy://always-on-top?enabled=true` |
+| Set all-Spaces behaviour | `clippy://all-spaces?enabled=true` |
+| Move to a named position | `clippy://position?name=bottom-right` |
+| Move to absolute AppKit coordinates | `clippy://move?x=120&y=80` |
+| Disable auto-animation | `clippy://auto-animate?value=off` |
+| Use random auto-animation intervals | `clippy://auto-animate?value=random` |
+| Set auto-animation interval | `clippy://auto-animate?seconds=30` |
+
+Boolean values accept `true`/`false`, `on`/`off`, `yes`/`no`, and `1`/`0`. Named positions are `top-left`, `top-right`, `bottom-left`, `bottom-right`, and `center`; `centre` is accepted as an alias. Auto-animation intervals must be between 5 and 3,600 seconds.
+
+Path values are accepted where one value is needed. For example:
 
 ```sh
-open 'clippy://show'
-open 'clippy://say?text=Build%20finished'
-open 'clippy://animate'
-open 'clippy://animate?name=Congratulate'
-open 'clippy://agent?name=merlin'
+open 'clippy://agent/merlin'
+open 'clippy://position/centre'
+open 'clippy://mute/off'
 ```
 
-The URL API supports:
-
-- `clippy://show`
-- `clippy://say?text=TEXT`
-- `clippy://animate` for a random animation
-- `clippy://animate?name=ANIMATION`
-- `clippy://agent?name=AGENT`
-
-Path values are accepted too, for example `clippy://agent/merlin`. Query values are safer for text containing spaces or punctuation.
+Query values are safer for text containing spaces or punctuation.
 
 ### clippyctl
 
@@ -64,9 +82,21 @@ Path values are accepted too, for example `clippy://agent/merlin`. Query values 
 make install-clippyctl
 
 clippyctl show
+clippyctl hide
+clippyctl toggle
 clippyctl say "The deployment is complete"
 clippyctl animate Congratulate
+clippyctl stop
 clippyctl agent merlin
+clippyctl random-agent
+clippyctl mute on
+clippyctl bubbles off
+clippyctl always-on-top on
+clippyctl all-spaces off
+clippyctl position bottom-right
+clippyctl move 120 80
+clippyctl auto-animate random
+clippyctl auto-animate 30
 ```
 
 Override the installation prefix when needed:
@@ -77,14 +107,16 @@ make install-clippyctl PREFIX=/usr/local
 
 ### macOS Shortcuts
 
-After launching the app once, Clippy provides these App Intents in Shortcuts:
+After launching the app once, Clippy provides Shortcuts actions for:
 
-- Show Clippy
-- Make Clippy Say
-- Animate Clippy
-- Select Clippy Agent
+- Visibility: show, hide and toggle
+- Speech, animation and stopping playback
+- Selecting a named or random agent
+- Mute, speech-bubble, always-on-top and all-Spaces settings
+- Named positioning and absolute movement
+- Auto-animation configuration
 
-The same actions are available to Siri through the shortcut phrases macOS exposes for the app.
+Common actions also expose Siri shortcut phrases through macOS.
 
 ## Publish Binaries
 
