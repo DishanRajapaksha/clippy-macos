@@ -9,10 +9,20 @@
 import Cocoa
 
 class AgentWindow: NSWindow {
+    override var collectionBehavior: NSWindow.CollectionBehavior {
+        get { super.collectionBehavior }
+        set {
+            // fullScreenAuxiliary opts Clippy into appearing over another app's
+            // full-screen Space. Strip it regardless of which caller updates
+            // the remaining Space behaviour.
+            super.collectionBehavior = newValue.subtracting(.fullScreenAuxiliary)
+        }
+    }
+
     override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
         level = NSWindow.Level.floating
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        collectionBehavior = [.canJoinAllSpaces, .stationary]
         canHide = true
         backingType = .buffered
         isMovable = true
