@@ -4,25 +4,48 @@ on:
   push:
     branches: [ "master" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "master", "agent/multi-agent-ci-base" ]
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-15
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Build Clippy macOS
+        shell: bash
         run: |
+          set +e
+          set -o pipefail
           xcodebuild \
             -project clippy.xcodeproj \
             -scheme "Clippy macOS" \
             -configuration Debug \
             -derivedDataPath "$PWD/.derived" \
             CODE_SIGNING_ALLOWED=NO \
-            build
+            build 2>&1 | tee build.log
+          status=${PIPESTATUS[0]}
+          grep -E "error:|warning:" build.log > build-diagnostics.txt || true
+          exit "$status"
+
+      - name: Upload build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build-diagnostics
+          path: |
+            build-diagnostics.txt
+            build.log
+          if-no-files-found: ignore
 
       - name: Run parser safety tests
         run: |
           "$PWD/.derived/Build/Products/Debug/Clippy.app/Contents/MacOS/Clippy" --self-test-parser
+
+      - name: Run automation URL tests
+        run: |
+          "$PWD/.derived/Build/Products/Debug/Clippy.app/Contents/MacOS/Clippy" --self-test-automation
+
+      - name: Validate clippyctl
+        run: zsh -n scripts/clippyctl
