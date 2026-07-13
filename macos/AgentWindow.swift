@@ -68,6 +68,7 @@ private final class ApplicationVisibilityController: NSObject, NSMenuDelegate {
     private var lastExternalApplication: NSRunningApplication?
     private var isHiddenByRule = false
     private var shouldRestoreAfterRule = false
+    private var foregroundApplicationTimer: Timer?
     private let visibilityMenu = NSMenu(title: "App Visibility")
 
     init(window: NSWindow) {
@@ -77,6 +78,7 @@ private final class ApplicationVisibilityController: NSObject, NSMenuDelegate {
     }
 
     deinit {
+        foregroundApplicationTimer?.invalidate()
         if let workspaceObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
         }
@@ -99,6 +101,12 @@ private final class ApplicationVisibilityController: NSObject, NSMenuDelegate {
             }
             self?.applicationDidActivate(application)
         }
+
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            self?.applyRuleForFrontmostApplication()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        foregroundApplicationTimer = timer
 
         appHiddenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didHideNotification,
@@ -276,12 +284,11 @@ private final class ApplicationVisibilityController: NSObject, NSMenuDelegate {
         guard let window else { return }
 
         if !isHiddenByRule {
-            shouldRestoreAfterRule = window.isVisible && !NSApp.isHidden
+            shouldRestoreAfterRule = window.alphaValue > 0
         }
 
-        if window.isVisible {
-            window.orderOut(nil)
-        }
+        window.alphaValue = 0
+        window.ignoresMouseEvents = true
         isHiddenByRule = true
     }
 
@@ -292,8 +299,9 @@ private final class ApplicationVisibilityController: NSObject, NSMenuDelegate {
             shouldRestoreAfterRule = false
         }
 
-        guard shouldRestoreAfterRule, !NSApp.isHidden else { return }
-        window?.orderFront(nil)
+        guard shouldRestoreAfterRule else { return }
+        window?.ignoresMouseEvents = false
+        window?.alphaValue = 1
     }
 
     private func foregroundExternalApplication() -> NSRunningApplication? {
