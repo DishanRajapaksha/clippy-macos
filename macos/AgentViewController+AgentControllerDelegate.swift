@@ -336,10 +336,10 @@ private final class AgentLayoutController: NSObject, NSMenuDelegate {
             )
 
             guard hypot(next.x - current.x, next.y - current.y) >= 0.25 else { continue }
-            let delegate = session.window.delegate
-            session.window.delegate = nil
+            let sessionDelegate = session.window.sessionDelegate
+            session.window.sessionDelegate = nil
             session.window.setFrameOrigin(next)
-            session.window.delegate = delegate
+            session.window.sessionDelegate = sessionDelegate
         }
 
         if identifiers.isEmpty {
