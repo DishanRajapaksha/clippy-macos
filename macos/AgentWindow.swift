@@ -378,8 +378,9 @@ final class AgentManagerWindowController: NSWindowController, NSTableViewDataSou
         for name in [
             NSWindow.didMoveNotification,
             NSWindow.didBecomeKeyNotification,
-            NSWindow.didOrderOnScreenNotification,
-            NSWindow.didOrderOffScreenNotification
+            NSWindow.didChangeOcclusionStateNotification,
+            NSWindow.didMiniaturizeNotification,
+            NSWindow.didDeminiaturizeNotification
         ] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
                 guard notification.object is AgentWindow else { return }
