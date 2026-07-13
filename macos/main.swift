@@ -13,17 +13,55 @@ import UniformTypeIdentifiers
 import AppIntents
 #endif
 
+enum ClippyWindowPosition: String, Equatable {
+    case topLeft = "top-left"
+    case topRight = "top-right"
+    case bottomLeft = "bottom-left"
+    case bottomRight = "bottom-right"
+    case center
+
+    init?(automationValue: String) {
+        switch automationValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "top-left", "topleft": self = .topLeft
+        case "top-right", "topright": self = .topRight
+        case "bottom-left", "bottomleft": self = .bottomLeft
+        case "bottom-right", "bottomright": self = .bottomRight
+        case "center", "centre", "middle": self = .center
+        default: return nil
+        }
+    }
+}
+
+enum ClippyAutoAnimateSetting: Equatable {
+    case off
+    case random
+    case seconds(TimeInterval)
+}
+
 enum ClippyAutomationCommand: Equatable {
     case show
+    case hide
+    case toggle
     case say(String)
     case animate(String?)
+    case stop
     case agent(String)
+    case randomAgent
+    case reload
+    case mute(Bool)
+    case speechBubbles(Bool)
+    case alwaysOnTop(Bool)
+    case joinAllSpaces(Bool)
+    case position(ClippyWindowPosition)
+    case move(x: Double, y: Double)
+    case autoAnimate(ClippyAutoAnimateSetting)
 }
 
 enum ClippyAutomationError: LocalizedError {
     case invalidURL
     case unsupportedAction(String)
     case missingValue(String)
+    case invalidValue(String, String)
     case valueTooLong(String, Int)
     case noAgentsAvailable
     case agentNotFound(String)
@@ -38,6 +76,8 @@ enum ClippyAutomationError: LocalizedError {
             return "The automation action \"\(action)\" is not supported."
         case .missingValue(let name):
             return "The automation action requires a non-empty \(name)."
+        case .invalidValue(let name, let expected):
+            return "The \(name) is invalid. Expected \(expected)."
         case .valueTooLong(let name, let limit):
             return "The \(name) is longer than the \(limit)-character limit."
         case .noAgentsAvailable:
@@ -130,6 +170,17 @@ final class ClippyAutomation {
         case .show:
             show(delegate: delegate)
 
+        case .hide:
+            hide(delegate: delegate)
+
+        case .toggle:
+            let controllerHidden = AppDelegate.agentController?.isHidden ?? false
+            if NSApp.isHidden || delegate.window?.isVisible != true || controllerHidden {
+                show(delegate: delegate)
+            } else {
+                hide(delegate: delegate)
+            }
+
         case .say(let text):
             show(delegate: delegate)
             try showSpeech(text: text)
@@ -146,6 +197,10 @@ final class ClippyAutomation {
                 controller.animate()
             }
 
+        case .stop:
+            dismissSpeech()
+            AppDelegate.agentController?.cancelPlayback()
+
         case .agent(let requestedName):
             let availableNames = Agent.agentNames()
             guard let name = availableNames.first(where: {
@@ -159,6 +214,57 @@ final class ClippyAutomation {
             }
             try controller.load(name: name)
             show(delegate: delegate)
+
+        case .randomAgent:
+            let names = Agent.agentNames()
+            guard !names.isEmpty else {
+                throw ClippyAutomationError.noAgentsAvailable
+            }
+            guard let controller = AppDelegate.agentController else {
+                throw ClippyAutomationError.automationUnavailable
+            }
+            let currentName = controller.agent?.resourceName
+            let candidates = names.count > 1 ? names.filter { $0 != currentName } : names
+            guard let name = candidates.randomElement() else {
+                throw ClippyAutomationError.noAgentsAvailable
+            }
+            try controller.load(name: name)
+            show(delegate: delegate)
+
+        case .reload:
+            delegate.reloadAction(sender: delegate)
+
+        case .mute(let enabled):
+            delegate.setMuted(enabled)
+
+        case .speechBubbles(let enabled):
+            delegate.setSpeechBubblesEnabled(enabled)
+            if !enabled {
+                dismissSpeech()
+            }
+
+        case .alwaysOnTop(let enabled):
+            UserDefaults.standard.set(enabled, forKey: AppDelegate.alwaysOnTopDefaultsKey)
+            delegate.applyWindowBehavior()
+            delegate.behaviorMenuItem?.submenu = delegate.createBehaviorMenu()
+
+        case .joinAllSpaces(let enabled):
+            UserDefaults.standard.set(enabled, forKey: AppDelegate.joinAllSpacesDefaultsKey)
+            delegate.applyWindowBehavior()
+            delegate.behaviorMenuItem?.submenu = delegate.createBehaviorMenu()
+
+        case .position(let position):
+            _ = try controllerWithLoadedAgent(delegate: delegate)
+            show(delegate: delegate)
+            try positionWindow(position, delegate: delegate)
+
+        case .move(let x, let y):
+            _ = try controllerWithLoadedAgent(delegate: delegate)
+            show(delegate: delegate)
+            try moveWindow(x: x, y: y, delegate: delegate)
+
+        case .autoAnimate(let setting):
+            applyAutoAnimate(setting)
         }
     }
 
@@ -172,6 +278,15 @@ final class ClippyAutomation {
             NSApp.unhide(delegate)
             NSApp.activate(ignoringOtherApps: true)
             delegate.window?.makeKeyAndOrderFront(delegate)
+        }
+    }
+
+    private func hide(delegate: ClippyAppDelegate) {
+        dismissSpeech()
+        if let controller = AppDelegate.agentController {
+            controller.hide()
+        } else {
+            NSApp.hide(delegate)
         }
     }
 
@@ -213,8 +328,7 @@ final class ClippyAutomation {
             throw ClippyAutomationError.automationUnavailable
         }
 
-        speechDismissWorkItem?.cancel()
-        speechPopover?.close()
+        dismissSpeech()
 
         let bubbleController = BalloonViewController(text: text, balloon: controller.agent?.balloon)
         let popover = NSPopover()
@@ -238,6 +352,13 @@ final class ClippyAutomation {
         DispatchQueue.main.asyncAfter(deadline: .now() + readingTime, execute: workItem)
     }
 
+    private func dismissSpeech() {
+        speechDismissWorkItem?.cancel()
+        speechDismissWorkItem = nil
+        speechPopover?.close()
+        speechPopover = nil
+    }
+
     private func preferredSpeechEdge(for size: CGSize, agentView: NSView) -> NSRectEdge {
         guard let window = agentView.window,
               let screen = window.screen ?? NSScreen.main else {
@@ -258,15 +379,72 @@ final class ClippyAutomation {
         return .maxX
     }
 
+    private func positionWindow(_ position: ClippyWindowPosition, delegate: ClippyAppDelegate) throws {
+        guard let window = delegate.window,
+              let screen = window.screen ?? NSScreen.main ?? NSScreen.screens.first else {
+            throw ClippyAutomationError.automationUnavailable
+        }
+
+        let visible = screen.visibleFrame
+        let inset: CGFloat = 24
+        var frame = window.frame
+
+        switch position {
+        case .topLeft:
+            frame.origin = CGPoint(x: visible.minX + inset, y: visible.maxY - frame.height - inset)
+        case .topRight:
+            frame.origin = CGPoint(x: visible.maxX - frame.width - inset, y: visible.maxY - frame.height - inset)
+        case .bottomLeft:
+            frame.origin = CGPoint(x: visible.minX + inset, y: visible.minY + inset)
+        case .bottomRight:
+            frame.origin = CGPoint(x: visible.maxX - frame.width - inset, y: visible.minY + inset)
+        case .center:
+            frame.origin = CGPoint(x: visible.midX - frame.width / 2, y: visible.midY - frame.height / 2)
+        }
+
+        frame = delegate.clampedWindowFrame(frame, for: window)
+        window.setFrame(frame, display: true, animate: true)
+        delegate.saveWindowFrame(frame)
+    }
+
+    private func moveWindow(x: Double, y: Double, delegate: ClippyAppDelegate) throws {
+        guard x.isFinite, y.isFinite else {
+            throw ClippyAutomationError.invalidValue("window coordinates", "finite x and y numbers")
+        }
+        guard let window = delegate.window else {
+            throw ClippyAutomationError.automationUnavailable
+        }
+
+        var frame = window.frame
+        frame.origin = CGPoint(x: x, y: y)
+        frame = delegate.clampedWindowFrame(frame, for: window)
+        window.setFrame(frame, display: true, animate: true)
+        delegate.saveWindowFrame(frame)
+    }
+
+    private func applyAutoAnimate(_ setting: ClippyAutoAnimateSetting) {
+        switch setting {
+        case .off:
+            UserDefaults.standard.set(0, forKey: AgentController.autoAnimateIntervalDefaultsKey)
+            AppDelegate.agentController?.autoAnimateTimer?.invalidate()
+            AppDelegate.agentController?.autoAnimateTimer = nil
+        case .random:
+            UserDefaults.standard.set(AgentController.randomAutoAnimateInterval, forKey: AgentController.autoAnimateIntervalDefaultsKey)
+            AppDelegate.agentController?.restartAutoAnimateTimer()
+        case .seconds(let seconds):
+            UserDefaults.standard.set(seconds, forKey: AgentController.autoAnimateIntervalDefaultsKey)
+            AppDelegate.agentController?.restartAutoAnimateTimer()
+        }
+        delegate?.autoAnimateMenuItem?.submenu = delegate?.createAutoAnimateMenu()
+    }
+
     func command(from url: URL) throws -> ClippyAutomationCommand {
         guard url.scheme?.caseInsensitiveCompare("clippy") == .orderedSame,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             throw ClippyAutomationError.invalidURL
         }
 
-        let pathParts = url.path
-            .split(separator: "/")
-            .map(String.init)
+        let pathParts = url.path.split(separator: "/").map(String.init)
         let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines)
         let action: String
         let pathValue: String?
@@ -276,9 +454,7 @@ final class ClippyAutomation {
             pathValue = pathParts.isEmpty ? nil : pathParts.joined(separator: "/")
         } else if let first = pathParts.first {
             action = first.lowercased()
-            pathValue = pathParts.count > 1
-                ? pathParts.dropFirst().joined(separator: "/")
-                : nil
+            pathValue = pathParts.count > 1 ? pathParts.dropFirst().joined(separator: "/") : nil
         } else {
             throw ClippyAutomationError.invalidURL
         }
@@ -292,20 +468,91 @@ final class ClippyAutomation {
         switch action {
         case "show":
             return .show
+        case "hide":
+            return .hide
+        case "toggle":
+            return .toggle
         case "say":
             return .say(try validatedValue(queryValue("text") ?? pathValue, name: "text", limit: 1_000))
         case "animate":
-            let requestedName = try optionalValidatedValue(
+            return .animate(try optionalValidatedValue(
                 queryValue("name") ?? queryValue("animation") ?? pathValue,
                 name: "animation name",
                 limit: 128
-            )
-            return .animate(requestedName)
+            ))
+        case "stop":
+            return .stop
         case "agent":
             return .agent(try validatedValue(queryValue("name") ?? pathValue, name: "agent name", limit: 128))
+        case "random-agent", "randomagent":
+            return .randomAgent
+        case "reload":
+            return .reload
+        case "mute":
+            return .mute(try booleanValue(queryValue("enabled") ?? pathValue, name: "mute value"))
+        case "bubbles", "speech-bubbles", "speechbubbles":
+            return .speechBubbles(try booleanValue(queryValue("enabled") ?? pathValue, name: "speech-bubble value"))
+        case "always-on-top", "alwaysontop":
+            return .alwaysOnTop(try booleanValue(queryValue("enabled") ?? pathValue, name: "always-on-top value"))
+        case "all-spaces", "join-all-spaces", "joinallspaces":
+            return .joinAllSpaces(try booleanValue(queryValue("enabled") ?? pathValue, name: "all-spaces value"))
+        case "position":
+            let rawValue = try validatedValue(queryValue("name") ?? queryValue("position") ?? pathValue, name: "position", limit: 64)
+            guard let position = ClippyWindowPosition(automationValue: rawValue) else {
+                throw ClippyAutomationError.invalidValue("position", "top-left, top-right, bottom-left, bottom-right, or center")
+            }
+            return .position(position)
+        case "move":
+            let x = try doubleValue(queryValue("x"), name: "x coordinate")
+            let y = try doubleValue(queryValue("y"), name: "y coordinate")
+            return .move(x: x, y: y)
+        case "auto-animate", "autoanimate":
+            if let seconds = queryValue("seconds") {
+                return .autoAnimate(.seconds(try autoAnimateSeconds(seconds)))
+            }
+            let value = try validatedValue(queryValue("value") ?? queryValue("mode") ?? pathValue, name: "auto-animate value", limit: 64)
+            return .autoAnimate(try autoAnimateSetting(from: value))
         default:
             throw ClippyAutomationError.unsupportedAction(action)
         }
+    }
+
+    func autoAnimateSetting(from value: String) throws -> ClippyAutoAnimateSetting {
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "off", "false", "0": return .off
+        case "random": return .random
+        default: return .seconds(try autoAnimateSeconds(value))
+        }
+    }
+
+    private func autoAnimateSeconds(_ value: String) throws -> TimeInterval {
+        let seconds = try doubleValue(value, name: "auto-animate interval")
+        guard (5...3_600).contains(seconds) else {
+            throw ClippyAutomationError.invalidValue("auto-animate interval", "a number from 5 to 3600 seconds")
+        }
+        return seconds
+    }
+
+    private func booleanValue(_ value: String?, name: String) throws -> Bool {
+        guard let value = try optionalValidatedValue(value, name: name, limit: 16) else {
+            throw ClippyAutomationError.missingValue(name)
+        }
+        switch value.lowercased() {
+        case "true", "1", "yes", "on", "enable", "enabled": return true
+        case "false", "0", "no", "off", "disable", "disabled": return false
+        default:
+            throw ClippyAutomationError.invalidValue(name, "true/false, on/off, yes/no, or 1/0")
+        }
+    }
+
+    private func doubleValue(_ value: String?, name: String) throws -> Double {
+        guard let rawValue = try optionalValidatedValue(value, name: name, limit: 64) else {
+            throw ClippyAutomationError.missingValue(name)
+        }
+        guard let value = Double(rawValue), value.isFinite else {
+            throw ClippyAutomationError.invalidValue(name, "a finite number")
+        }
+        return value
     }
 
     private func validatedValue(_ value: String?, name: String, limit: Int) throws -> String {
@@ -316,8 +563,7 @@ final class ClippyAutomation {
     }
 
     private func optionalValidatedValue(_ value: String?, name: String, limit: Int) throws -> String? {
-        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !value.isEmpty else {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
             return nil
         }
         guard value.count <= limit else {
@@ -347,6 +593,30 @@ struct ShowClippyIntent: AppIntent {
 
     func perform() async throws -> some IntentResult {
         try await ClippyAutomation.shared.execute(.show)
+        return .result()
+    }
+}
+
+@available(macOS 13.0, *)
+struct HideClippyIntent: AppIntent {
+    static var title: LocalizedStringResource = "Hide Clippy"
+    static var description = IntentDescription("Hides Clippy, using the agent's hide animation when available.")
+    static var openAppWhenRun: Bool { true }
+
+    func perform() async throws -> some IntentResult {
+        try await ClippyAutomation.shared.execute(.hide)
+        return .result()
+    }
+}
+
+@available(macOS 13.0, *)
+struct ToggleClippyIntent: AppIntent {
+    static var title: LocalizedStringResource = "Toggle Clippy"
+    static var description = IntentDescription("Shows or hides Clippy based on its current visibility.")
+    static var openAppWhenRun: Bool { true }
+
+    func perform() async throws -> some IntentResult {
+        try await ClippyAutomation.shared.execute(.toggle)
         return .result()
     }
 }
@@ -382,6 +652,18 @@ struct AnimateClippyIntent: AppIntent {
 }
 
 @available(macOS 13.0, *)
+struct StopClippyIntent: AppIntent {
+    static var title: LocalizedStringResource = "Stop Clippy"
+    static var description = IntentDescription("Stops the current animation, audio, and automation speech bubble.")
+    static var openAppWhenRun: Bool { true }
+
+    func perform() async throws -> some IntentResult {
+        try await ClippyAutomation.shared.execute(.stop)
+        return .result()
+    }
+}
+
+@available(macOS 13.0, *)
 struct SelectClippyAgentIntent: AppIntent {
     static var title: LocalizedStringResource = "Select Clippy Agent"
     static var description = IntentDescription("Switches Clippy to an installed Microsoft Agent character.")
@@ -397,6 +679,142 @@ struct SelectClippyAgentIntent: AppIntent {
 }
 
 @available(macOS 13.0, *)
+struct RandomClippyAgentIntent: AppIntent {
+    static var title: LocalizedStringResource = "Random Clippy Agent"
+    static var description = IntentDescription("Switches to a random installed agent.")
+    static var openAppWhenRun: Bool { true }
+
+    func perform() async throws -> some IntentResult {
+        try await ClippyAutomation.shared.execute(.randomAgent)
+        return .result()
+    }
+}
+
+@available(macOS 13.0, *)
+struct ReloadClippyIntent: AppIntent {
+    static var title: LocalizedStringResource = "Reload Clippy"
+    static var description = IntentDescription("Reloads Clippy's agent and animation menus.")
+    static var openAppWhenRun: Bool { true }
+
+    func perform() async throws -> some IntentResult {
+        try await ClippyAutomation.shared.execute(.reload)
+        return .result()
+    }
+}
+
+@available(macOS 13.0, *)
+struct SetClippyMutedIntent: AppIntent {
+    static var title: LocalizedStringResource = "Set Clippy Muted"
+    static var description = IntentDescription("Turns Clippy's animation audio on or off.")
+    static var openAppWhenRun: Bool { true }
+
+    @Parameter(title: "Muted")
+    var muted: Bool
+
+    func perform() async throws -> some IntentResult {
+        try await ClippyAutomation.shared.execute(.mute(muted))
+        return .result()
+    }
+}
+
+@available(macOS 13.0, *)
+struct SetClippySpeechBubblesIntent: AppIntent {
+    static var title: LocalizedStringResource = "Set Clippy Speech Bubbles"
+    static var description = IntentDescription("Enables or disables Clippy's click-triggered speech bubbles.")
+    static var openAppWhenRun: Bool { true }
+
+    @Parameter(title: "Enabled")
+    var enabled: Bool
+
+    func perform() async throws -> some IntentResult {
+        try await ClippyAutomation.shared.execute(.speechBubbles(enabled))
+        return .result()
+    }
+}
+
+@available(macOS 13.0, *)
+struct SetClippyAlwaysOnTopIntent: AppIntent {
+    static var title: LocalizedStringResource = "Set Clippy Always on Top"
+    static var description = IntentDescription("Controls whether Clippy floats above ordinary windows.")
+    static var openAppWhenRun: Bool { true }
+
+    @Parameter(title: "Enabled")
+    var enabled: Bool
+
+    func perform() async throws -> some IntentResult {
+        try await ClippyAutomation.shared.execute(.alwaysOnTop(enabled))
+        return .result()
+    }
+}
+
+@available(macOS 13.0, *)
+struct SetClippyAllSpacesIntent: AppIntent {
+    static var title: LocalizedStringResource = "Set Clippy on All Spaces"
+    static var description = IntentDescription("Controls whether Clippy follows you between desktop Spaces.")
+    static var openAppWhenRun: Bool { true }
+
+    @Parameter(title: "Enabled")
+    var enabled: Bool
+
+    func perform() async throws -> some IntentResult {
+        try await ClippyAutomation.shared.execute(.joinAllSpaces(enabled))
+        return .result()
+    }
+}
+
+@available(macOS 13.0, *)
+struct PositionClippyIntent: AppIntent {
+    static var title: LocalizedStringResource = "Position Clippy"
+    static var description = IntentDescription("Moves Clippy to a named screen position.")
+    static var openAppWhenRun: Bool { true }
+
+    @Parameter(title: "Position", description: "top-left, top-right, bottom-left, bottom-right, or center")
+    var position: String
+
+    func perform() async throws -> some IntentResult {
+        guard let parsed = ClippyWindowPosition(automationValue: position) else {
+            throw ClippyAutomationError.invalidValue("position", "top-left, top-right, bottom-left, bottom-right, or center")
+        }
+        try await ClippyAutomation.shared.execute(.position(parsed))
+        return .result()
+    }
+}
+
+@available(macOS 13.0, *)
+struct MoveClippyIntent: AppIntent {
+    static var title: LocalizedStringResource = "Move Clippy"
+    static var description = IntentDescription("Moves Clippy to absolute macOS screen coordinates.")
+    static var openAppWhenRun: Bool { true }
+
+    @Parameter(title: "X")
+    var x: Double
+
+    @Parameter(title: "Y")
+    var y: Double
+
+    func perform() async throws -> some IntentResult {
+        try await ClippyAutomation.shared.execute(.move(x: x, y: y))
+        return .result()
+    }
+}
+
+@available(macOS 13.0, *)
+struct SetClippyAutoAnimateIntent: AppIntent {
+    static var title: LocalizedStringResource = "Set Clippy Auto Animate"
+    static var description = IntentDescription("Sets auto-animation to off, random, or an interval in seconds.")
+    static var openAppWhenRun: Bool { true }
+
+    @Parameter(title: "Mode or Seconds", description: "Use off, random, or a number from 5 to 3600.")
+    var value: String
+
+    func perform() async throws -> some IntentResult {
+        let setting = try ClippyAutomation.shared.autoAnimateSetting(from: value)
+        try await ClippyAutomation.shared.execute(.autoAnimate(setting))
+        return .result()
+    }
+}
+
+@available(macOS 13.0, *)
 struct ClippyAppShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
@@ -404,6 +822,18 @@ struct ClippyAppShortcuts: AppShortcutsProvider {
             phrases: ["Show \(.applicationName)", "Bring back \(.applicationName)"],
             shortTitle: "Show Clippy",
             systemImageName: "paperclip"
+        )
+        AppShortcut(
+            intent: HideClippyIntent(),
+            phrases: ["Hide \(.applicationName)"],
+            shortTitle: "Hide Clippy",
+            systemImageName: "eye.slash"
+        )
+        AppShortcut(
+            intent: ToggleClippyIntent(),
+            phrases: ["Toggle \(.applicationName)"],
+            shortTitle: "Toggle Clippy",
+            systemImageName: "arrow.triangle.2.circlepath"
         )
         AppShortcut(
             intent: SayWithClippyIntent(),
@@ -418,10 +848,22 @@ struct ClippyAppShortcuts: AppShortcutsProvider {
             systemImageName: "sparkles"
         )
         AppShortcut(
+            intent: StopClippyIntent(),
+            phrases: ["Stop \(.applicationName)"],
+            shortTitle: "Stop Clippy",
+            systemImageName: "stop.circle"
+        )
+        AppShortcut(
             intent: SelectClippyAgentIntent(),
             phrases: ["Use \(\.$agent) in \(.applicationName)"],
             shortTitle: "Select Agent",
             systemImageName: "person.crop.circle"
+        )
+        AppShortcut(
+            intent: RandomClippyAgentIntent(),
+            phrases: ["Choose a random \(.applicationName) agent"],
+            shortTitle: "Random Agent",
+            systemImageName: "shuffle"
         )
     }
 }
@@ -493,11 +935,27 @@ private enum AutomationSelfTest {
     static func run() -> Int32 {
         let cases: [(String, ClippyAutomationCommand)] = [
             ("clippy://show", .show),
+            ("clippy://hide", .hide),
+            ("clippy://toggle", .toggle),
             ("clippy://say?text=Build%20finished", .say("Build finished")),
             ("clippy://say/Hello%20there", .say("Hello there")),
             ("clippy://animate", .animate(nil)),
             ("clippy://animate/Congratulate", .animate("Congratulate")),
-            ("clippy://agent?name=merlin", .agent("merlin"))
+            ("clippy://stop", .stop),
+            ("clippy://agent?name=merlin", .agent("merlin")),
+            ("clippy://random-agent", .randomAgent),
+            ("clippy://reload", .reload),
+            ("clippy://mute?enabled=on", .mute(true)),
+            ("clippy://mute/off", .mute(false)),
+            ("clippy://bubbles?enabled=false", .speechBubbles(false)),
+            ("clippy://always-on-top?enabled=1", .alwaysOnTop(true)),
+            ("clippy://all-spaces?enabled=no", .joinAllSpaces(false)),
+            ("clippy://position?name=bottom-right", .position(.bottomRight)),
+            ("clippy://position/centre", .position(.center)),
+            ("clippy://move?x=120.5&y=80", .move(x: 120.5, y: 80)),
+            ("clippy://auto-animate?value=off", .autoAnimate(.off)),
+            ("clippy://auto-animate/random", .autoAnimate(.random)),
+            ("clippy://auto-animate?seconds=30", .autoAnimate(.seconds(30)))
         ]
 
         do {
@@ -515,6 +973,11 @@ private enum AutomationSelfTest {
                 "https://example.com/show",
                 "clippy://say",
                 "clippy://agent",
+                "clippy://mute",
+                "clippy://mute?enabled=perhaps",
+                "clippy://position?name=somewhere",
+                "clippy://move?x=1",
+                "clippy://auto-animate?seconds=2",
                 "clippy://unknown"
             ]
             for rawURL in rejectedURLs {
