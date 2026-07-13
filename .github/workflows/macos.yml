@@ -2,7 +2,7 @@ name: macOS
 
 on:
   push:
-    branches: [ "master", "agent/multiple-agent-windows" ]
+    branches: [ "master" ]
   pull_request:
     branches: [ "master" ]
 
