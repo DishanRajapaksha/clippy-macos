@@ -19,6 +19,7 @@ class AgentViewController: NSViewController {
     var agentView: AgentView
     private var speechPopover: NSPopover?
     private var speechDismissWorkItem: DispatchWorkItem?
+    private(set) var speechQueueDepth = 0
     private var lastDragScreenPoint: CGPoint?
     private var mouseDownScreenPoint: CGPoint?
     private var lastDragTimestamp: TimeInterval = 0
@@ -289,6 +290,7 @@ extension AgentViewController {
     func speak(text: String) {
         speechDismissWorkItem?.cancel()
         speechPopover?.close()
+        speechQueueDepth = 1
 
         let bubbleVC = BalloonViewController(text: text, balloon: agentController.agent?.balloon)
         let popover = NSPopover()
@@ -305,6 +307,9 @@ extension AgentViewController {
 
         let work = DispatchWorkItem { [weak self] in
             self?.speechPopover?.close()
+            self?.speechPopover = nil
+            self?.speechDismissWorkItem = nil
+            self?.speechQueueDepth = 0
         }
         speechDismissWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: work)
