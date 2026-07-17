@@ -8,16 +8,24 @@
 
 import AppKit
 
+enum AgentReactionDirection {
+    case left
+    case right
+}
+
 class AgentViewController: NSViewController {
+    let sessionID: UUID
     var agentController: AgentController
     var agentView: AgentView
     private var speechPopover: NSPopover?
     private var speechDismissWorkItem: DispatchWorkItem?
+    private(set) var speechQueueDepth = 0
     private var lastDragScreenPoint: CGPoint?
     private var mouseDownScreenPoint: CGPoint?
     private var lastDragTimestamp: TimeInterval = 0
     private var dragVelocity: CGPoint = .zero
     private var hasDragged = false
+    private var hasLoadedInitialAgent = false
     private var inertiaTimer: Timer?
     private let quickPhrases = [
         "Need a hand?",
@@ -31,10 +39,10 @@ class AgentViewController: NSViewController {
         "Let's get this done."
     ]
 
-    init() {
+    init(sessionID: UUID) {
+        self.sessionID = sessionID
         agentView = AgentView()
         agentController = AgentController(agentView: agentView)
-        AppDelegate.agentController = agentController
         super.init(nibName: nil, bundle: nil)
         agentController.delegate = self
     }
@@ -45,7 +53,7 @@ class AgentViewController: NSViewController {
 
     override func loadView() {
         let size = CGSize(width: 100, height: 200)
-        view = NSView(frame: CGRect(origin: CGPoint.zero, size: size))
+        view = NSView(frame: CGRect(origin: .zero, size: size))
         view.wantsLayer = true
         view.layer?.backgroundColor = .clear
     }
@@ -60,15 +68,25 @@ class AgentViewController: NSViewController {
     override func viewDidAppear() {
         super.viewDidAppear()
         view.window?.makeFirstResponder(self)
-        if let appDelegate = NSApplication.shared.delegate as? AppDelegate {
-            agentController.isMuted = appDelegate.isMuted()
+        guard !hasLoadedInitialAgent else { return }
+        hasLoadedInitialAgent = true
+
+        if let settings = currentSettings {
+            agentController.isMuted = settings.isMuted
+            agentController.configuredAutoAnimateInterval = settings.autoAnimateInterval
         }
 
-        let lastUsedName = (NSApplication.shared.delegate as? AppDelegate)?.lastUsedAgent
-        let name = lastUsedName ?? Agent.randomAgentName()
-        if let name = name {
-            try? agentController.load(name: name)
-            agentController.show()
+        let name = currentSettings?.agentName ?? Agent.randomAgentName()
+        if let name {
+            do {
+                try agentController.load(name: name)
+                agentController.show()
+            } catch {
+                (NSApplication.shared.delegate as? AppDelegate)?.presentAlert(
+                    title: "Agent Could Not Load",
+                    message: error.localizedDescription
+                )
+            }
         }
     }
 
@@ -85,15 +103,46 @@ class AgentViewController: NSViewController {
         let trackingArea = NSTrackingArea(rect: view.frame, options: options, owner: self, userInfo: nil)
         view.addTrackingArea(trackingArea)
     }
+
+    var currentSettings: AgentSessionSettings? {
+        (NSApplication.shared.delegate as? AppDelegate)?.sessionManager.settings(for: sessionID)
+    }
+
+    func reactToNearbyAgent(named otherName: String, direction: AgentReactionDirection, isReply: Bool) {
+        guard currentSettings?.proximityReactionsEnabled ?? true else { return }
+        let directionNames = direction == .right
+            ? ["LookRight", "LookRightReturn", "Wave", "Greet"]
+            : ["LookLeft", "LookLeftReturn", "Wave", "Greet"]
+        if let animation = directionNames.compactMap({ agentController.agent?.findAnimation($0) }).first {
+            agentController.play(animation: animation)
+        } else {
+            agentController.animate()
+        }
+
+        guard currentSettings?.speechBubblesEnabled ?? true else { return }
+        let greetingPhrases = [
+            "Hello, \(otherName)!",
+            "Two assistants. This should be efficient.",
+            "Well, fancy meeting you here."
+        ]
+        let replyPhrases = [
+            "I was wondering when you'd show up.",
+            "Need a hand, \(otherName)?",
+            "Let's compare notes."
+        ]
+        if let phrase = (isReply ? replyPhrases : greetingPhrases).randomElement() {
+            speak(text: phrase)
+        }
+    }
 }
 
 extension AgentViewController {
     override func mouseEntered(with event: NSEvent) {
-        self.view.superview?.window?.alphaValue = 1.0
+        view.window?.alphaValue = 1.0
     }
 
     override func mouseExited(with event: NSEvent) {
-        self.view.superview?.window?.alphaValue = 1.0
+        view.window?.alphaValue = 1.0
     }
 
     @objc func animateAction() {
@@ -105,9 +154,9 @@ extension AgentViewController {
     }
 
     @objc func chooseAssistantAction() {
-        guard let name = Agent.randomAgentName() else { return }
-        try? agentController.load(name: name)
-        agentController.show()
+        guard let name = Agent.randomAgentName(),
+              let appDelegate = NSApplication.shared.delegate as? AppDelegate else { return }
+        appDelegate.sessionManager.selectAgent(name, for: sessionID)
     }
 
     override var acceptsFirstResponder: Bool {
@@ -124,22 +173,20 @@ extension AgentViewController {
             return
         }
         switch Int(event.keyCode) {
-        case 49: // Spacebar
+        case 49:
             agentController.animate()
-        case 36: // Return
-            guard let name = Agent.randomAgentName() else { return }
-            try? agentController.load(name: name)
-            agentController.show()
-        case 124: // Arrow Right Key
+        case 36:
+            chooseAssistantAction()
+        case 124:
             guard let animation = agent.findAnimation("LookLeft") else { break }
             agentController.play(animation: animation)
-        case 123: // Arrow Left Key
+        case 123:
             guard let animation = agent.findAnimation("LookRight") else { break }
             agentController.play(animation: animation)
-        case 126: // Arrow Up Key
+        case 126:
             guard let animation = agent.findAnimation("LookUp") else { break }
             agentController.play(animation: animation)
-        case 125: // Arrow Down Key
+        case 125:
             guard let animation = agent.findAnimation("LookDown") else { break }
             agentController.play(animation: animation)
         default:
@@ -149,6 +196,10 @@ extension AgentViewController {
 
     override func mouseDown(with event: NSEvent) {
         stopInertia()
+        (NSApplication.shared.delegate as? AppDelegate)?.sessionManager.activate(
+            sessionID: sessionID,
+            bringForward: false
+        )
         if event.clickCount == 2 {
             agentController.animate()
         }
@@ -168,7 +219,7 @@ extension AgentViewController {
         let dy = current.y - previous.y
         guard dx != 0 || dy != 0 else { return }
 
-        if let mouseDownScreenPoint = mouseDownScreenPoint,
+        if let mouseDownScreenPoint,
            hypot(current.x - mouseDownScreenPoint.x, current.y - mouseDownScreenPoint.y) >= 3 {
             hasDragged = true
         }
@@ -198,13 +249,14 @@ extension AgentViewController {
             applyThrowInertiaIfNeeded()
             saveCurrentWindowFrame()
         } else if event.clickCount == 1,
-                  (NSApplication.shared.delegate as? AppDelegate)?.isSpeechBubblesEnabled() ?? true {
+                  currentSettings?.speechBubblesEnabled ?? true {
             speakRandomPhrase()
         }
     }
 
     override func rightMouseDown(with event: NSEvent) {
         guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else { return }
+        appDelegate.sessionManager.activate(sessionID: sessionID, bringForward: false)
         let menu = appDelegate.createMainMenu()
         NSMenu.popUpContextMenu(menu, with: event, for: agentView)
     }
@@ -214,14 +266,16 @@ extension AgentViewController {
     }
 
     @objc func optionsAction(sender: AnyObject) {
-        let viewController = BalloonViewController(text: "Options are currently minimal.", balloon: agentController.agent?.balloon)
+        let viewController = BalloonViewController(
+            text: "Options are currently minimal.",
+            balloon: agentController.agent?.balloon
+        )
         let popOver = NSPopover()
         popOver.behavior = .semitransient
         popOver.contentSize = viewController.contentSize
         popOver.animates = true
         popOver.contentViewController = viewController
-        let rect = self.view.frame
-        popOver.show(relativeTo: rect, of: view, preferredEdge: NSRectEdge.maxY)
+        popOver.show(relativeTo: view.frame, of: view, preferredEdge: .maxY)
     }
 
     @objc private func saySomethingAction() {
@@ -233,9 +287,10 @@ extension AgentViewController {
         speak(text: phrase)
     }
 
-    private func speak(text: String) {
+    func speak(text: String) {
         speechDismissWorkItem?.cancel()
         speechPopover?.close()
+        speechQueueDepth = 1
 
         let bubbleVC = BalloonViewController(text: text, balloon: agentController.agent?.balloon)
         let popover = NSPopover()
@@ -243,11 +298,18 @@ extension AgentViewController {
         popover.contentSize = bubbleVC.contentSize
         popover.animates = true
         popover.contentViewController = bubbleVC
-        popover.show(relativeTo: agentView.bounds, of: agentView, preferredEdge: preferredSpeechEdge(for: bubbleVC.contentSize))
+        popover.show(
+            relativeTo: agentView.bounds,
+            of: agentView,
+            preferredEdge: preferredSpeechEdge(for: bubbleVC.contentSize)
+        )
         speechPopover = popover
 
         let work = DispatchWorkItem { [weak self] in
             self?.speechPopover?.close()
+            self?.speechPopover = nil
+            self?.speechDismissWorkItem = nil
+            self?.speechQueueDepth = 0
         }
         speechDismissWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: work)
@@ -270,14 +332,14 @@ extension AgentViewController {
     }
 
     private func applyThrowInertiaIfNeeded() {
-        guard (NSApplication.shared.delegate as? AppDelegate)?.isThrowInertiaEnabled() ?? true else { return }
+        guard currentSettings?.throwInertiaEnabled ?? true else { return }
         guard let window = view.window else { return }
         let speed = hypot(dragVelocity.x, dragVelocity.y)
         guard speed > 250 else { return }
 
         stopInertia()
         inertiaTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self, weak window] timer in
-            guard let self = self, let window = window else {
+            guard let self, let window else {
                 timer.invalidate()
                 return
             }
@@ -305,11 +367,11 @@ extension AgentViewController {
     }
 
     private func applyEdgeSnap() {
-        guard (NSApplication.shared.delegate as? AppDelegate)?.isEdgeSnapEnabled() ?? true else { return }
-        guard let window = view.window, let screen = relevantScreen(for: window.frame, window: window) else { return }
+        guard currentSettings?.edgeSnapEnabled ?? true else { return }
+        guard let window = view.window,
+              let screen = relevantScreen(for: window.frame, window: window) else { return }
         let snapDistance: CGFloat = 18
         let visible = screen.visibleFrame
-
         var frame = clampedFrame(window.frame, in: window)
 
         let leftDistance = abs(frame.minX - visible.minX)
@@ -336,7 +398,6 @@ extension AgentViewController {
     private func clampedFrame(_ frame: CGRect, in window: NSWindow) -> CGRect {
         guard let screen = relevantScreen(for: frame, window: window) else { return frame }
         let visible = screen.visibleFrame
-
         var clamped = frame
         clamped.origin.x = max(visible.minX, min(clamped.origin.x, visible.maxX - clamped.width))
         clamped.origin.y = max(visible.minY, min(clamped.origin.y, visible.maxY - clamped.height))
@@ -364,7 +425,8 @@ extension AgentViewController {
     }
 
     private func saveCurrentWindowFrame() {
-        guard let frame = view.window?.frame else { return }
-        (NSApplication.shared.delegate as? AppDelegate)?.saveWindowFrame(frame)
+        guard let frame = view.window?.frame,
+              let appDelegate = NSApplication.shared.delegate as? AppDelegate else { return }
+        appDelegate.sessionManager.updateWindowFrame(for: sessionID, frame: frame)
     }
 }
