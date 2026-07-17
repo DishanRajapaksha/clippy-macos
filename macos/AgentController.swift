@@ -37,6 +37,12 @@ class AgentController {
     static let randomAutoAnimateInterval: TimeInterval = -1
     static let randomAutoAnimateRange: ClosedRange<TimeInterval> = 5...60
     static let muteDefaultsKey = "IsMuted"
+    private static let textureCacheByteLimit: UInt64 = 64 * 1_024 * 1_024
+
+    private struct CachedTexture {
+        let texture: SKTexture
+        let byteCost: UInt64
+    }
 
     var isMuted = false
     var configuredAutoAnimateInterval = AgentController.defaultAutoAnimateInterval
@@ -49,13 +55,14 @@ class AgentController {
 
     var agent: Agent?
     var agentView: AgentView?
-    private var textureCache: [Int: SKTexture] = [:]
+    private var textureCache: [Int: CachedTexture] = [:]
+    private var textureCacheLRU: [Int] = []
+    private var textureCacheBytes: UInt64 = 0
     private let textureCacheLock = NSLock()
     private let metricsLock = NSLock()
     private var currentAnimationName: String?
     private var renderedFrameCount: UInt64 = 0
     private var recentFrameTimestamps: [TimeInterval] = []
-    private var textureCacheBytes: UInt64 = 0
     private var preparationWorkSeconds: TimeInterval = 0
 
     var delegate: AgentControllerDelegate?
@@ -79,10 +86,9 @@ class AgentController {
         delegate?.willLoadAgent(agent: agent)
         textureCacheLock.lock()
         textureCache.removeAll(keepingCapacity: true)
-        textureCacheLock.unlock()
-        metricsLock.lock()
+        textureCacheLRU.removeAll(keepingCapacity: true)
         textureCacheBytes = 0
-        metricsLock.unlock()
+        textureCacheLock.unlock()
         self.agent = agent
         showInitialFrame()
         restartAutoAnimateTimer()
@@ -131,37 +137,40 @@ class AgentController {
         currentAnimationName = animation.name
         metricsLock.unlock()
 
+        // Prepare and display one frame at a time so an animation cannot retain
+        // its entire texture sequence outside the bounded cache.
+        playFrame(
+            in: animation,
+            agent: agent,
+            frameIndex: 0,
+            stepsTaken: 0,
+            maxFrames: max(animation.frames.count * 8, 64),
+            soundEnabled: soundEnabled,
+            playbackID: currentPlaybackID,
+            completion: completion
+        )
+    }
+
+    private func playFrame(
+        in animation: AgentAnimation,
+        agent: Agent,
+        frameIndex: Int,
+        stepsTaken: Int,
+        maxFrames: Int,
+        soundEnabled: Bool,
+        playbackID currentPlaybackID: UUID,
+        completion: (() -> Void)?
+    ) {
+        guard playbackID == currentPlaybackID else { return }
+        guard animation.frames.indices.contains(frameIndex), stepsTaken < maxFrames else {
+            finishPlayback(playbackID: currentPlaybackID, completion: completion)
+            return
+        }
+
+        let frame = animation.frames[frameIndex]
         DispatchQueue.global(qos: .background).async {
             let preparationStartedAt = ProcessInfo.processInfo.systemUptime
-            var actions: [SKAction] = []
-
-            // Microsoft Agent frames can branch via ExitBranch + DefineBranching.
-            // Build action sequence by following probabilistic branches at runtime.
-            var frameIndex = 0
-            var safetyCounter = 0
-            let maxFrames = max(animation.frames.count * 8, 64)
-
-            while frameIndex >= 0 && frameIndex < animation.frames.count && safetyCounter < maxFrames {
-                let frame = animation.frames[frameIndex]
-
-                if soundEnabled, let audioAction = self.audioActionForFrame(frame: frame) {
-                    actions.append(audioAction)
-                }
-
-                guard let texture = self.texture(for: frame, in: agent) else {
-                    safetyCounter += 1
-                    frameIndex = self.nextFrameIndex(after: frameIndex, in: animation)
-                    continue
-                }
-                actions.append(SKAction.run { [weak self] in
-                    self?.recordRenderedFrame()
-                })
-                let action = SKAction.animate(with: [texture], timePerFrame: frame.durationInSeconds)
-                actions.append(action)
-
-                safetyCounter += 1
-                frameIndex = self.nextFrameIndex(after: frameIndex, in: animation)
-            }
+            let texture = self.texture(for: frame, in: agent)
 
             self.recordPreparationWork(
                 ProcessInfo.processInfo.systemUptime - preparationStartedAt
@@ -169,21 +178,57 @@ class AgentController {
 
             DispatchQueue.main.async {
                 guard self.playbackID == currentPlaybackID else { return }
-                guard !actions.isEmpty else {
-                    self.isAnimating = false
-                    self.finishAnimationMetrics()
-                    completion?()
+                guard let texture else {
+                    self.playFrame(
+                        in: animation,
+                        agent: agent,
+                        frameIndex: self.nextFrameIndex(after: frameIndex, in: animation),
+                        stepsTaken: stepsTaken + 1,
+                        maxFrames: maxFrames,
+                        soundEnabled: soundEnabled,
+                        playbackID: currentPlaybackID,
+                        completion: completion
+                    )
                     return
                 }
-                self.agentView?.agentSprite.removeAllActions()
-                self.agentView?.agentSprite.run(SKAction.sequence(actions), completion: {
+
+                guard let sprite = self.agentView?.agentSprite else {
+                    self.finishPlayback(playbackID: currentPlaybackID, completion: completion)
+                    return
+                }
+
+                var actions: [SKAction] = []
+                if soundEnabled, let audioAction = self.audioActionForFrame(frame: frame) {
+                    actions.append(audioAction)
+                }
+                actions.append(SKAction.run { [weak self] in
+                    self?.recordRenderedFrame()
+                })
+                actions.append(SKAction.animate(with: [texture], timePerFrame: frame.durationInSeconds))
+
+                sprite.removeAllActions()
+                sprite.run(SKAction.sequence(actions), completion: {
                     guard self.playbackID == currentPlaybackID else { return }
-                    self.isAnimating = false
-                    self.finishAnimationMetrics()
-                    completion?()
+                    self.playFrame(
+                        in: animation,
+                        agent: agent,
+                        frameIndex: self.nextFrameIndex(after: frameIndex, in: animation),
+                        stepsTaken: stepsTaken + 1,
+                        maxFrames: maxFrames,
+                        soundEnabled: soundEnabled,
+                        playbackID: currentPlaybackID,
+                        completion: completion
+                    )
                 })
             }
         }
+    }
+
+    private func finishPlayback(playbackID expectedPlaybackID: UUID, completion: (() -> Void)?) {
+        guard playbackID == expectedPlaybackID else { return }
+        isAnimating = false
+        finishAnimationMetrics()
+        completion?()
     }
 
     private func nextFrameIndex(after currentIndex: Int, in animation: AgentAnimation) -> Int {
@@ -218,22 +263,46 @@ class AgentController {
 
     private func texture(at index: Int, for agent: Agent) -> SKTexture? {
         textureCacheLock.lock()
-        if let texture = textureCache[index] {
+        if let cached = textureCache[index] {
+            touchTextureCacheEntry(index)
             textureCacheLock.unlock()
-            return texture
+            return cached.texture
         }
         textureCacheLock.unlock()
 
         guard let image = try? agent.textureAtIndex(index: index) else { return nil }
         let texture = SKTexture(cgImage: image)
         texture.filteringMode = .nearest
+        let byteCost = UInt64(image.width * image.height * 4)
+
         textureCacheLock.lock()
-        textureCache[index] = texture
+        if let cached = textureCache[index] {
+            touchTextureCacheEntry(index)
+            textureCacheLock.unlock()
+            return cached.texture
+        }
+
+        if byteCost <= Self.textureCacheByteLimit {
+            while textureCacheBytes + byteCost > Self.textureCacheByteLimit,
+                  let evictedIndex = textureCacheLRU.first {
+                textureCacheLRU.removeFirst()
+                if let evicted = textureCache.removeValue(forKey: evictedIndex) {
+                    textureCacheBytes -= evicted.byteCost
+                }
+            }
+            textureCache[index] = CachedTexture(texture: texture, byteCost: byteCost)
+            textureCacheLRU.append(index)
+            textureCacheBytes += byteCost
+        }
         textureCacheLock.unlock()
-        metricsLock.lock()
-        textureCacheBytes += UInt64(image.width * image.height * 4)
-        metricsLock.unlock()
         return texture
+    }
+
+    private func touchTextureCacheEntry(_ index: Int) {
+        if let existingIndex = textureCacheLRU.firstIndex(of: index) {
+            textureCacheLRU.remove(at: existingIndex)
+        }
+        textureCacheLRU.append(index)
     }
 
     private func selectBranch(from branchings: [AgentBranching]) -> AgentBranching? {
@@ -312,13 +381,16 @@ class AgentController {
 
     func resourceSnapshot() -> AgentResourceSnapshot {
         let now = ProcessInfo.processInfo.systemUptime
+        textureCacheLock.lock()
+        let cacheBytes = textureCacheBytes
+        textureCacheLock.unlock()
         metricsLock.lock()
         recentFrameTimestamps.removeAll { now - $0 > 1.0 }
         let snapshot = AgentResourceSnapshot(
             currentAnimationName: currentAnimationName,
             renderedFrameCount: renderedFrameCount,
             framesPerSecond: Double(recentFrameTimestamps.count),
-            textureCacheBytes: textureCacheBytes,
+            textureCacheBytes: cacheBytes,
             preparationWorkSeconds: preparationWorkSeconds,
             isAnimating: isAnimating
         )
