@@ -40,13 +40,120 @@ struct ParsedACSAgent {
     let animations: [AgentAnimation]
     let states: [AgentState]
     let spriteMap: CGImage
-    let spriteImages: [CGImage]
+    let frameStore: ACSAgentParser.FrameStore
     let soundsURL: URL
     let soundURLsByIndex: [Int: URL]
 }
 
 struct ACSAgentParser {
     private static let signature: UInt32 = 0xABCDABC3
+
+    final class SourceImageStore {
+        // Keep the compact ACS data and decode only the source layers needed by
+        // the frames currently being displayed.
+        private static let cacheByteLimit = 32 * 1_024 * 1_024
+
+        private let data: Data
+        private let entries: [SourceImageEntry]
+        private let palette: [ACSPaletteColor]
+        private let transparentIndex: Int
+        private let lock = NSLock()
+        private var cache: [Int: SourceImage] = [:]
+        private var cacheLRU: [Int] = []
+        private var cacheBytes = 0
+
+        fileprivate init(
+            data: Data,
+            entries: [SourceImageEntry],
+            palette: [ACSPaletteColor],
+            transparentIndex: Int
+        ) {
+            self.data = data
+            self.entries = entries
+            self.palette = palette
+            self.transparentIndex = transparentIndex
+        }
+
+        fileprivate func image(at index: Int) throws -> SourceImage {
+            lock.lock()
+            if let image = cache[index] {
+                touch(index)
+                lock.unlock()
+                return image
+            }
+            lock.unlock()
+
+            guard entries.indices.contains(index) else {
+                throw AgentError.frameOutOfBounds
+            }
+            let image = try ACSAgentParser.decodeSourceImage(
+                from: data,
+                entry: entries[index],
+                palette: palette,
+                transparentIndex: transparentIndex
+            )
+            let byteCost = image.width * image.height * 4
+
+            lock.lock()
+            if let cached = cache[index] {
+                touch(index)
+                lock.unlock()
+                return cached
+            }
+            if byteCost <= Self.cacheByteLimit {
+                while cacheBytes + byteCost > Self.cacheByteLimit,
+                      let evictedIndex = cacheLRU.first {
+                    cacheLRU.removeFirst()
+                    if let evicted = cache.removeValue(forKey: evictedIndex) {
+                        cacheBytes -= evicted.width * evicted.height * 4
+                    }
+                }
+                cache[index] = image
+                cacheLRU.append(index)
+                cacheBytes += byteCost
+            }
+            lock.unlock()
+            return image
+        }
+
+        private func touch(_ index: Int) {
+            if let existingIndex = cacheLRU.firstIndex(of: index) {
+                cacheLRU.remove(at: existingIndex)
+            }
+            cacheLRU.append(index)
+        }
+    }
+
+    final class FrameStore {
+        private let sourceImages: SourceImageStore
+        private let frameImages: [[SourceFrameImage]]
+        private let characterWidth: Int
+        private let characterHeight: Int
+
+        fileprivate init(
+            sourceImages: SourceImageStore,
+            frameImages: [[SourceFrameImage]],
+            characterWidth: Int,
+            characterHeight: Int
+        ) {
+            self.sourceImages = sourceImages
+            self.frameImages = frameImages
+            self.characterWidth = characterWidth
+            self.characterHeight = characterHeight
+        }
+
+        func image(at index: Int) throws -> CGImage {
+            guard frameImages.indices.contains(index) else {
+                throw AgentError.frameOutOfBounds
+            }
+            return try ACSAgentParser.composeFrame(
+                frameImages[index],
+                sourceImages: sourceImages,
+                characterWidth: characterWidth,
+                characterHeight: characterHeight
+            )
+        }
+    }
 
     static func parse(url: URL, resourceName: String) throws -> ParsedACSAgent {
         let data = try Data(contentsOf: url)
@@ -62,7 +169,7 @@ struct ACSAgentParser {
         let audioLocator = try reader.readLocator()
 
         let characterInfo = try parseCharacterInfo(from: data, locator: characterLocator)
-        let images = try parseImages(
+        let images = try makeSourceImageStore(
             from: data,
             locator: imageLocator,
             palette: characterInfo.palette,
@@ -71,29 +178,21 @@ struct ACSAgentParser {
         let sourceAnimations = try parseAnimations(from: data, locator: animationLocator)
         let audioURLs = try writeAudioCache(from: data, locator: audioLocator, acsURL: url, resourceName: resourceName)
 
-        let spriteFrames = try buildSpriteFrames(
+        let frameStoreResult = buildFrameStore(
             animations: sourceAnimations,
             sourceImages: images,
             characterWidth: characterInfo.character.width,
             characterHeight: characterInfo.character.height
         )
 
-        let spriteMap: CGImage
-        if let firstImage = spriteFrames.images.first {
-            spriteMap = firstImage
-        } else {
-            spriteMap = try makeEmptyImage(
-                width: characterInfo.character.width,
-                height: characterInfo.character.height
-            )
-        }
+        let spriteMap = try frameStoreResult.store.image(at: 0)
 
         let animations = sourceAnimations.map { sourceAnimation in
             AgentAnimation(
                 name: sourceAnimation.name,
                 transitionType: sourceAnimation.transitionType,
                 frames: sourceAnimation.frames.map { sourceFrame in
-                    let spriteIndex = spriteFrames.indexesByFrameID[sourceFrame.id] ?? 0
+                    let spriteIndex = frameStoreResult.indexesByFrameID[sourceFrame.id] ?? 0
                     let soundEffect = sourceFrame.audioIndex.map { "Audio\\\($0).wav" }
                     return AgentFrame(
                         duration: sourceFrame.duration,
@@ -112,7 +211,7 @@ struct ACSAgentParser {
             animations: animations,
             states: characterInfo.states,
             spriteMap: spriteMap,
-            spriteImages: spriteFrames.images,
+            frameStore: frameStoreResult.store,
             soundsURL: audioURLs.directory,
             soundURLsByIndex: audioURLs.urlsByIndex
         )
@@ -132,6 +231,10 @@ private extension ACSAgentParser {
         let width: Int
         let height: Int
         let cgImage: CGImage
+    }
+
+    struct SourceImageEntry {
+        let locator: ACSLocator
     }
 
     struct SourceFrameImage: Hashable {
@@ -155,8 +258,8 @@ private extension ACSAgentParser {
         let frames: [SourceFrame]
     }
 
-    struct SpriteFrames {
-        let images: [CGImage]
+    struct FrameStoreResult {
+        let store: FrameStore
         let indexesByFrameID: [Int: Int]
     }
 
@@ -252,60 +355,73 @@ private extension ACSAgentParser {
         return infos
     }
 
-    static func parseImages(
+    static func makeSourceImageStore(
         from data: Data,
         locator: ACSLocator,
         palette: [ACSPaletteColor],
         transparentIndex: Int
-    ) throws -> [SourceImage] {
+    ) throws -> SourceImageStore {
         var reader = ACSBinaryReader(data: data)
         try reader.seek(to: locator.offset)
 
         let count = Int(try reader.readUInt32())
-        var entries: [(locator: ACSLocator, checksum: UInt32)] = []
+        var entries: [SourceImageEntry] = []
         entries.reserveCapacity(count)
         for _ in 0..<count {
-            entries.append((try reader.readLocator(), try reader.readUInt32()))
+            entries.append(SourceImageEntry(locator: try reader.readLocator()))
+            _ = try reader.readUInt32()
         }
 
-        return try entries.map { entry in
-            var imageReader = ACSBinaryReader(data: data)
-            try imageReader.seek(to: entry.locator.offset)
+        return SourceImageStore(
+            data: data,
+            entries: entries,
+            palette: palette,
+            transparentIndex: transparentIndex
+        )
+    }
 
-            _ = try imageReader.readUInt8()
-            let width = Int(try imageReader.readUInt16())
-            let height = Int(try imageReader.readUInt16())
-            let isCompressed = try imageReader.readBool()
-            let imageBlock = try imageReader.readDataBlock()
-            try imageReader.skipCompressedBlock()
+    static func decodeSourceImage(
+        from data: Data,
+        entry: SourceImageEntry,
+        palette: [ACSPaletteColor],
+        transparentIndex: Int
+    ) throws -> SourceImage {
+        var imageReader = ACSBinaryReader(data: data)
+        try imageReader.seek(to: entry.locator.offset)
 
-            let stride = (width + 3) & ~3
-            let expectedSize = stride * height
-            let image: CGImage
-            do {
-                let bitmapData = isCompressed
-                    ? try ACSDecompressor.decompress(imageBlock, expectedSize: expectedSize)
-                    : imageBlock
+        _ = try imageReader.readUInt8()
+        let width = Int(try imageReader.readUInt16())
+        let height = Int(try imageReader.readUInt16())
+        let isCompressed = try imageReader.readBool()
+        let imageBlock = try imageReader.readDataBlock()
+        try imageReader.skipCompressedBlock()
 
-                guard bitmapData.count >= expectedSize else {
-                    throw ACSAgentParserError.invalidImageData
-                }
+        let stride = (width + 3) & ~3
+        let expectedSize = stride * height
+        let image: CGImage
+        do {
+            let bitmapData = isCompressed
+                ? try ACSDecompressor.decompress(imageBlock, expectedSize: expectedSize)
+                : imageBlock
 
-                image = try makeImage(
-                    width: width,
-                    height: height,
-                    stride: stride,
-                    indexedBitmap: bitmapData,
-                    palette: palette,
-                    transparentIndex: transparentIndex
-                )
-            } catch {
-                // Some ACS files in the wild contain a few corrupt compressed bitmaps.
-                // Keep the character loadable and leave only those source images transparent.
-                image = try makeEmptyImage(width: width, height: height)
+            guard bitmapData.count >= expectedSize else {
+                throw ACSAgentParserError.invalidImageData
             }
-            return SourceImage(width: width, height: height, cgImage: image)
+
+            image = try makeImage(
+                width: width,
+                height: height,
+                stride: stride,
+                indexedBitmap: bitmapData,
+                palette: palette,
+                transparentIndex: transparentIndex
+            )
+        } catch {
+            // Some ACS files in the wild contain a few corrupt compressed bitmaps.
+            // Keep the character loadable and leave only those source images transparent.
+            image = try makeEmptyImage(width: width, height: height)
         }
+        return SourceImage(width: width, height: height, cgImage: image)
     }
 
     static func parseAnimations(from data: Data, locator: ACSLocator) throws -> [SourceAnimation] {
@@ -406,13 +522,13 @@ private extension ACSAgentParser {
         return AudioCache(directory: directory, urlsByIndex: urlsByIndex)
     }
 
-    static func buildSpriteFrames(
+    static func buildFrameStore(
         animations: [SourceAnimation],
-        sourceImages: [SourceImage],
+        sourceImages: SourceImageStore,
         characterWidth: Int,
         characterHeight: Int
-    ) throws -> SpriteFrames {
-        var images: [CGImage] = []
+    ) -> FrameStoreResult {
+        var frameImages: [[SourceFrameImage]] = []
         var indexesByFrameID: [Int: Int] = [:]
         var indexesByImageStack: [[SourceFrameImage]: Int] = [:]
 
@@ -423,29 +539,31 @@ private extension ACSAgentParser {
                     continue
                 }
 
-                let spriteIndex = images.count
-                let image = try composeFrame(
-                    frame,
-                    sourceImages: sourceImages,
-                    characterWidth: characterWidth,
-                    characterHeight: characterHeight
-                )
+                let spriteIndex = frameImages.count
                 indexesByImageStack[frame.images] = spriteIndex
                 indexesByFrameID[frame.id] = spriteIndex
-                images.append(image)
+                frameImages.append(frame.images)
             }
         }
 
-        if images.isEmpty {
-            images.append(try makeEmptyImage(width: characterWidth, height: characterHeight))
+        if frameImages.isEmpty {
+            frameImages.append([])
         }
 
-        return SpriteFrames(images: images, indexesByFrameID: indexesByFrameID)
+        return FrameStoreResult(
+            store: FrameStore(
+                sourceImages: sourceImages,
+                frameImages: frameImages,
+                characterWidth: characterWidth,
+                characterHeight: characterHeight
+            ),
+            indexesByFrameID: indexesByFrameID
+        )
     }
 
     static func composeFrame(
-        _ frame: SourceFrame,
-        sourceImages: [SourceImage],
+        _ frameImages: [SourceFrameImage],
+        sourceImages: SourceImageStore,
         characterWidth: Int,
         characterHeight: Int
     ) throws -> CGImage {
@@ -463,9 +581,8 @@ private extension ACSAgentParser {
         }
 
         context.clear(CGRect(x: 0, y: 0, width: characterWidth, height: characterHeight))
-        for frameImage in frame.images.reversed() {
-            guard sourceImages.indices.contains(frameImage.imageIndex) else { continue }
-            let sourceImage = sourceImages[frameImage.imageIndex]
+        for frameImage in frameImages.reversed() {
+            guard let sourceImage = try? sourceImages.image(at: frameImage.imageIndex) else { continue }
             let drawRect = CGRect(
                 x: frameImage.x,
                 y: characterHeight - frameImage.y - sourceImage.height,

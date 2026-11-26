@@ -31,7 +31,7 @@ struct Agent {
     var resourceName: String
     var resourceNameWithSuffix: String
     var spriteMap: CGImage
-    var spriteImages: [CGImage] = []
+    var acsFrameStore: ACSAgentParser.FrameStore?
     let soundsURL: URL
     var soundURLsByIndex: [Int: URL] = [:]
 
@@ -39,6 +39,7 @@ struct Agent {
         self.agentURL = agentURL
         self.resourceNameWithSuffix = agentURL.lastPathComponent
         self.resourceName = agentURL.deletingPathExtension().lastPathComponent
+        self.acsFrameStore = nil
 
         if agentURL.pathExtension.lowercased() == "acs" {
             guard let parsedAgent = try? SafeACSAgentParser.parse(url: agentURL, resourceName: resourceName) else {
@@ -51,7 +52,7 @@ struct Agent {
             self.animations = parsedAgent.animations
             self.states = parsedAgent.states
             self.spriteMap = parsedAgent.spriteMap
-            self.spriteImages = parsedAgent.spriteImages
+            self.acsFrameStore = parsedAgent.frameStore
             return
         }
 
@@ -153,8 +154,8 @@ extension Agent {
     }
 
     func textureAtIndex(index: Int) throws -> CGImage {
-        if spriteImages.indices.contains(index) {
-            return spriteImages[index]
+        if let acsFrameStore {
+            return try acsFrameStore.image(at: index)
         }
 
         guard columns > 0 else { throw AgentError.invalidSpriteMap }
