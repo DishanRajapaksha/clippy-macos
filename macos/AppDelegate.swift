@@ -415,6 +415,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, AgentPreviewViewControllerDe
             Self.edgeSnapEnabledDefaultsKey: true
         ])
 
+        let bundledAgents = agentImporter.installBundledAgents()
+        for failure in bundledAgents.failures {
+            NSLog("Could not install bundled agent: %@", failure)
+        }
+
         setupStatusBar()
         sessionManager.restoreSessions()
     }

@@ -71,6 +71,14 @@ final class AgentImporter {
         self.fileManager = fileManager
     }
 
+    func installBundledAgents() -> AgentImportOutcome {
+        let archives = ["clippit", "links", "merlin"].compactMap { name -> URL? in
+            guard Agent.agentURL(forResourceName: name) == nil else { return nil }
+            return Bundle.main.url(forResource: "\(name).agent", withExtension: "zip")
+        }
+        return importAgents(from: archives)
+    }
+
     func importAgents(from urls: [URL]) -> AgentImportOutcome {
         var outcome = AgentImportOutcome()
         for url in urls {
@@ -246,6 +254,11 @@ final class AgentImporter {
         for case let item as URL in enumerator {
             let values = try? item.resourceValues(forKeys: [.isDirectoryKey])
             let isDirectory = values?.isDirectory ?? item.hasDirectoryPath
+            // Finder ZIPs keep resource forks in a parallel __MACOSX tree.
+            if isDirectory && item.lastPathComponent == "__MACOSX" {
+                enumerator.skipDescendants()
+                continue
+            }
             let ext = item.pathExtension.lowercased()
             if isDirectory && ext == "agent" {
                 candidates.append(item)
